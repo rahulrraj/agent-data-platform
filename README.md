@@ -1,10 +1,11 @@
-# Agent API
+# Agent Data Platform
 
-A single HTTP API that invokes an AI agent. Switch the agent framework
+An agent platform: one HTTP API that invokes an AI agent, a React chat UI,
+and a registry that connects the agent to organization data (Snowflake,
+SQL Server, REST APIs) discovered at runtime. Switch the agent framework
 (Strands / LangGraph) and the model (Ollama / Gemini) with env vars — the
 service never knows which is running. The agent answers questions with tools,
-including organization data (Snowflake, SQL Server, REST APIs) discovered at
-runtime from a capability registry.
+including organization data discovered by meaning from the capability registry.
 
 ## System overview
 
@@ -102,6 +103,14 @@ missing, mistyped, or unknown, execution returns a clean error — never a
 traceback. The registry file is version-controlled: adding a capability is a
 repo edit + review + deploy.
 
+Description vectors are embedded once and cached in SQLite
+(`EMBEDDING_CACHE_PATH`), so a restart doesn't re-embed thousands of
+descriptions — only new or edited ones. To draft entries from a
+Swagger/OpenAPI spec: `python -m agent_api.capability_import --from swagger
+--spec openapi.json --connection <name> --out draft.yaml`. Output is a draft
+for review; the `skills/capability-generator` skill documents the review
+checklist (descriptions as user needs, example values, merge, test).
+
 ```yaml
 # registry/capabilities.yaml — one entry exposes one dataset
 - id: customer_by_id
@@ -186,7 +195,7 @@ React chat frontend in `src/ui/` — ChatGPT-style layout, Claude-style warmth,
 Gemini-style accents. Streams replies token-by-token over `/api/chat`.
 
 ```bash
-cd ui && npm install && npm run dev    # http://localhost:5173
+cd src/ui && npm install && npm run dev    # http://localhost:5173
 ```
 
 `/api/*` is proxied to the API in dev; set `VITE_API_URL` for a deployed
@@ -246,13 +255,16 @@ src/agent_api/
   tools/                  one folder per tool plugin (auto-discovered, see ADR 0001)
                           factory plugins expose create_tool(deps) for injection
   ports/                  outbound contracts: model_gateway, conversation_repository,
-                          capability_repository, capability_executor, embedding_gateway
+                          capability_repository, capability_executor,
+                          embedding_gateway, embedding_cache
   adapters/               port implementations: strands/langgraph gateways (× ollama/gemini),
                           memory/sqlite repos, yaml registry, http/snowflake/sqlserver
-                          executors, ollama/gemini embeddings
+                          executors, ollama/gemini embeddings, sqlite embedding cache
+  capability_import/      spec → draft capability YAML (swagger now, snowflake planned)
   platform/               shared technical capabilities: retry with backoff
 registry/capabilities.yaml
 src/ui/                      React chat frontend (see src/ui/README.md)
+skills/capability-generator/ project skill: generate → review → merge → test
 doc/
   hexagonal-architecture.md
   platform-principles.md  cloud-agnostic, resilient, multi-runtime, model-agnostic
@@ -270,7 +282,7 @@ doc/
 | `doc/agent-lifecycle.md` | ADLC: stages, gates, and the ship checklist |
 | `doc/guardrails.md` | Guardrail catalog — enforced vs. planned, honestly marked |
 | `doc/approvals.md` | Approval matrix, what counts as approval, emergency path |
-| `doc/adr/` | Decision records: 0001 tools folder · 0002 capability registry · 0003 dual frameworks |
+| `doc/adr/` | Decision records: 0001 tools folder · 0002 capability registry · 0003 dual frameworks · 0004 no composites |
 
 ## Principles in one line each
 
