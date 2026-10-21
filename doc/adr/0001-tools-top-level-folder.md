@@ -2,7 +2,7 @@
 
 **Status:** accepted
 **Date:** 2026-10-21
-**Context:** `doc/architecture-reference.md` §11 (placement test) would put
+**Context:** `doc/hexagonal-architecture.md` §11 (placement test) would put
 technology-independent tool functions in `domain/`, and §2 says not to invent
 categories.
 

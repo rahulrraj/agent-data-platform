@@ -5,7 +5,7 @@ conventions live in `~/AGENTS.md`.)
 
 ## Architecture
 
-This repo follows `doc/architecture-reference.md` (hexagonal/clean
+This repo follows `doc/hexagonal-architecture.md` (hexagonal/clean
 architecture; copied from the `# Architecture Reference` Drive doc — the Drive
 copy is the original). The placement test in §11 decides where code goes;
 the one-way dependency rule in §3 is mandatory:

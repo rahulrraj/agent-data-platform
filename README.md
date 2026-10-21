@@ -1,7 +1,7 @@
 # Agent API
 
 A minimal HTTP API that invokes a [Strands](https://strandsagents.com) agent
-with a few tools. The code follows `doc/architecture-reference.md`
+with a few tools. The code follows `doc/hexagonal-architecture.md`
 (hexagonal/clean architecture with DDD tactical patterns — copied from the
 `# Architecture Reference` doc in Drive).
 
