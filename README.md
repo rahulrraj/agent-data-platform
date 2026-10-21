@@ -10,7 +10,7 @@ runtime from a capability registry.
 
 ```mermaid
 flowchart TB
-    Browser([User in browser<br/>ui/ — React chat]) --> HTTP["<b>controllers/http.py</b><br/>POST /api/ask · POST /api/chat (SSE)<br/>GET /api/health · GET /api/ready"]
+    Browser([User in browser<br/>src/ui — React chat]) --> HTTP["<b>controllers/http.py</b><br/>POST /api/ask · POST /api/chat (SSE)<br/>GET /api/health · GET /api/ready"]
     HTTP --> Svc["<b>services/ask_agent.py</b><br/>AskAgentService — the 'ask the agent' use case"]
     Svc --> CR["ports/<b>ConversationRepository</b><br/>load · save · ping"]
     Svc --> MG["ports/<b>ModelGateway</b><br/>generate · stream · ping"]
@@ -182,7 +182,7 @@ curl -X POST localhost:8000/api/ask \
 
 ## Web UI
 
-React chat frontend in `ui/` — ChatGPT-style layout, Claude-style warmth,
+React chat frontend in `src/ui/` — ChatGPT-style layout, Claude-style warmth,
 Gemini-style accents. Streams replies token-by-token over `/api/chat`.
 
 ```bash
@@ -190,7 +190,7 @@ cd ui && npm install && npm run dev    # http://localhost:5173
 ```
 
 `/api/*` is proxied to the API in dev; set `VITE_API_URL` for a deployed
-build. See `ui/README.md`.
+build. See `src/ui/README.md`.
 
 ## Configure
 
@@ -251,7 +251,7 @@ src/agent_api/
                           executors, ollama/gemini embeddings
   platform/               shared technical capabilities: retry with backoff
 registry/capabilities.yaml
-ui/                         React chat frontend (see ui/README.md)
+src/ui/                      React chat frontend (see src/ui/README.md)
 doc/
   hexagonal-architecture.md
   platform-principles.md  cloud-agnostic, resilient, multi-runtime, model-agnostic
