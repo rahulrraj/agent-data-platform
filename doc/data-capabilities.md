@@ -11,7 +11,8 @@ without hardcoded per-entity tools. See ADR 0002 for the decision record.
 - **Registry** — the YAML file. It is version-controlled configuration:
   adding an entry is a repo edit + review + deploy, never a runtime action.
 - **discover_capability** — tool. Semantic search ("customer tier lookup")
-  over capability descriptions; returns matches with parameter schemas.
+  over capability descriptions; returns the single best-matching capability
+  with its parameter schema.
 - **execute_capability** — tool. Validates parameters, dispatches to the
   executor for the capability's kind, returns JSON.
 

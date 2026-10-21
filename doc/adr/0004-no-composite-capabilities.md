@@ -24,10 +24,10 @@ needs a join or a fan-out, the API behind the capability does it — e.g. the
 registry holds `returns_by_customer`, not `accounts_by_customer` +
 `account_returns` plus a pipeline gluing them.
 
-`discover_capability` returns the minimal sufficient set: the single API
-needed to answer, not a grab-bag of primitives. Model-orchestrated chaining
-(option 2) remains the fallback for genuinely multi-hop needs that no
-single API covers — accepted as working for simple cases.
+`discover_capability` returns the single best-matching capability: the one
+API needed to answer, not a grab-bag of primitives. Model-orchestrated
+chaining (option 2) remains the fallback for genuinely multi-hop needs that
+no single API covers — accepted as working for simple cases.
 
 ## Consequences
 

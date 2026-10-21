@@ -89,15 +89,15 @@ def deps():
 
 def test_discover_finds_matching_capability(deps):
     discover = create_discover(deps)
-    matches = json.loads(discover("customer tier lookup"))
-    assert matches[0]["id"] == "customer_by_id"
-    assert matches[0]["parameters"]["customer_id"]["required"] is True
+    match = json.loads(discover("customer tier lookup"))
+    assert match["id"] == "customer_by_id"
+    assert match["parameters"]["customer_id"]["required"] is True
 
 
 def test_discover_matches_second_capability(deps):
     discover = create_discover(deps)
-    matches = json.loads(discover("where is my order"))
-    assert matches[0]["id"] == "order_status"
+    match = json.loads(discover("where is my order"))
+    assert match["id"] == "order_status"
 
 
 def test_discover_no_match_below_threshold():

@@ -44,11 +44,12 @@ def create_tool(deps):
 
     @tool
     def discover_capability(need: str) -> str:
-        """Find which organization data you can look up for a need.
+        """Find the organization-data API for a need.
 
         Describe what you need in plain words, e.g. "customer tier by ID".
-        Returns matching capabilities with their ids and parameter schemas —
-        pass the chosen id and parameters to execute_capability.
+        Returns the single best-matching capability as JSON with its id and
+        parameter schema — pass the id and parameters to execute_capability.
+        If nothing matches, it says so instead of guessing.
         """
         try:
             index = _index()
@@ -71,27 +72,28 @@ def create_tool(deps):
             key=lambda item: cosine_similarity(query_vector, item[1]),
             reverse=True,
         )
-        matches = [
+        # The single best match only (ADR 0004): discovery answers "which
+        # API", not "which APIs". Below the threshold it reports no match
+        # rather than guessing.
+        best, best_vector = ranked[0]
+        if cosine_similarity(query_vector, best_vector) < _SIMILARITY_THRESHOLD:
+            return (
+                "No data capability matches that need. "
+                "Answer from what you know or say you cannot look it up."
+            )
+        return json.dumps(
             {
-                "id": cap.id,
-                "description": cap.description,
+                "id": best.id,
+                "description": best.description,
                 "parameters": {
                     p.name: {
                         "type": p.type,
                         "required": p.required,
                         "description": p.description,
                     }
-                    for p in cap.parameters
+                    for p in best.parameters
                 },
             }
-            for cap, vector in ranked[:3]
-            if cosine_similarity(query_vector, vector) >= _SIMILARITY_THRESHOLD
-        ]
-        if not matches:
-            return (
-                "No data capability matches that need. "
-                "Answer from what you know or say you cannot look it up."
-            )
-        return json.dumps(matches)
+        )
 
     return discover_capability
