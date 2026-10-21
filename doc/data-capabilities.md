@@ -87,6 +87,22 @@ Snowflake accepts `private_key` (preferred) or `password`. SQL Server accepts
    `{"rows": [{"name": "...", "tier": "Gold"}], "truncated": false}`
 4. Model answers.
 
+## Generating from Swagger
+
+Hand-writing entries is fine for a few; for a whole API, generate a draft:
+
+    python -m agent_api.capability_import --from swagger \
+        --spec openapi.json --connection orders_api --out draft.yaml
+
+OpenAPI 3.x and Swagger 2.0; GET operations only (the platform is
+read-only — anything else is listed as skipped, not guessed); query + path
+parameters with local `$ref`s resolved. Output is a **draft**: descriptions
+come from the spec's summaries, so rewrite them as user needs (ADR 0004)
+and set `fields` where you want trimmed responses, then merge into the
+registry by hand. The registry stays reviewed code — the generator never
+edits it. Snowflake-table import will plug into the same module later
+(`--from snowflake`).
+
 ## What the model sees
 
 Concise and complete — nothing more, nothing less. The model gets: the
