@@ -38,6 +38,9 @@ controllers/ -> services/ -> ports/        (adapters implement ports)
   reads the environment.
 - `main.py` — composition root: the ONLY place that reads Settings and picks
   adapters. No business logic.
+- `ui/` — React chat frontend (Vite). Talks to the API over HTTP/SSE only;
+  never imports backend code. See `ui/README.md`.
+- `registry/` — data capability registry YAML (see doc/data-capabilities.md).
 
 Create only the folders the project needs (`workflows/`, `mappers/` were
 deliberately skipped). `platform/` holds retry primitives. Record deliberate

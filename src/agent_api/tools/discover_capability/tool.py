@@ -28,12 +28,19 @@ def create_tool(deps):
         )
 
     capabilities = registry.list_all()
-    vectors = (
-        embedding_gateway.embed([c.description for c in capabilities])
-        if capabilities
-        else []
-    )
-    index = list(zip(capabilities, vectors))
+    # Descriptions are embedded lazily on first use and cached: startup must
+    # never block on the embedding backend (it may be down or missing the
+    # model). A failed lookup returns a clean message and retries next call.
+    cache: dict = {}
+
+    def _index():
+        if "vectors" not in cache:
+            cache["vectors"] = (
+                embedding_gateway.embed([c.description for c in capabilities])
+                if capabilities
+                else []
+            )
+        return list(zip(capabilities, cache["vectors"]))
 
     @tool
     def discover_capability(need: str) -> str:
@@ -43,9 +50,22 @@ def create_tool(deps):
         Returns matching capabilities with their ids and parameter schemas —
         pass the chosen id and parameters to execute_capability.
         """
+        try:
+            index = _index()
+        except Exception as exc:  # noqa: BLE001
+            return (
+                "Data capability lookup is temporarily unavailable: "
+                f"{exc}. Answer from what you know."
+            )
         if not index:
             return "No data capabilities are configured."
-        query_vector = embedding_gateway.embed([need])[0]
+        try:
+            query_vector = embedding_gateway.embed([need])[0]
+        except Exception as exc:  # noqa: BLE001
+            return (
+                "Data capability lookup is temporarily unavailable: "
+                f"{exc}. Answer from what you know."
+            )
         ranked = sorted(
             index,
             key=lambda item: cosine_similarity(query_vector, item[1]),

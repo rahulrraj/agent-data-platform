@@ -49,3 +49,27 @@ def test_generate_uses_tool_and_answers():
     turn = gateway.generate(conv)
     assert "42" in turn.content, turn.content
     assert "calculate" in turn.tool_uses, turn.tool_uses
+
+
+@needs_ollama
+def test_stream_yields_text_and_tool_chunks():
+    import asyncio
+
+    async def collect():
+        tools = load_tools()
+        gateway = OllamaModelGateway(
+            host=OLLAMA_HOST,
+            model_id=OLLAMA_MODEL,
+            tools=tools,
+            system_prompt=build_system_prompt(tool_names(tools)),
+            retry_policy=RetryPolicy(),
+        )
+        conv = Conversation(id="t", turns=[Turn(role=USER, content="What is 6 * 7? Use the calculate tool.")])
+        return [c async for c in gateway.stream(conv)]
+
+    chunks = asyncio.run(collect())
+    kinds = {c.kind for c in chunks}
+    assert "text" in kinds, [c for c in chunks]
+    assert "tool" in kinds
+    assert any(c.payload == "calculate" for c in chunks if c.kind == "tool")
+    assert "42" in "".join(c.payload for c in chunks if c.kind == "text")

@@ -65,6 +65,9 @@ class StrandsGatewayBase:
             messages=messages,
             system_prompt=self._system_prompt,
             tools=self._tools,
+            # Explicit None -> null handler. The default would print every
+            # streamed token to the server's stdout.
+            callback_handler=None,
         )
 
     @staticmethod
@@ -111,12 +114,15 @@ class StrandsGatewayBase:
     ) -> AsyncIterator[StreamChunk]:
         agent = self._build_agent(conversation)
         async for event in agent.stream_async():  # no prompt: seeded history
-            delta = (event.get("contentBlockDelta") or {}).get("delta") or {}
-            if "text" in delta:
-                yield StreamChunk(kind="text", payload=delta["text"])
+            # Text deltas arrive as {"data": "<text>"}; other events carry
+            # dicts (message/result) or lifecycle markers — ignore those.
+            data = event.get("data")
+            if isinstance(data, str) and data:
+                yield StreamChunk(kind="text", payload=data)
             if "current_tool_use" in event:
                 name = (event["current_tool_use"] or {}).get("name", "")
-                yield StreamChunk(kind="tool", payload=name)
+                if name:
+                    yield StreamChunk(kind="tool", payload=name)
 
     async def stream(
         self, conversation: Conversation
