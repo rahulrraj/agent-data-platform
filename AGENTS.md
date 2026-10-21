@@ -7,7 +7,9 @@ conventions live in `~/AGENTS.md`.)
 
 This repo follows `doc/hexagonal-architecture.md` (hexagonal/clean
 architecture; copied from the `# Architecture Reference` Drive doc — the Drive
-copy is the original). The placement test in §11 decides where code goes;
+copy is the original) for *structure*, and `doc/platform-principles.md`
+(cloud-agnostic, resilient, multi-runtime, model-agnostic) for *platform
+qualities*. The placement test in §11 decides where code goes;
 the one-way dependency rule in §3 is mandatory:
 
 ```text

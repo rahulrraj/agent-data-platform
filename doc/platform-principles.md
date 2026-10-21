@@ -1,0 +1,87 @@
+# Platform Principles
+
+Cross-cutting qualities for this agent platform: **cloud-agnostic**,
+**resilient**, **multi-runtime**, **model-agnostic**.
+
+Companion to `doc/hexagonal-architecture.md` (which governs *structure* —
+where code lives and what may depend on what). This doc governs *platform
+qualities* — what the system must hold true regardless of where it runs or
+which model answers.
+
+## 1. Cloud agnostic
+
+The platform runs on any cloud, or none. No cloud-provider SDKs, managed
+services, or proprietary APIs in the core.
+
+- **Container-first.** The `Dockerfile` is the deployment contract. Nothing in
+  the codebase assumes AWS, GCP, or Azure.
+- **12-factor config.** All settings come from environment variables, loaded
+  once in `config/settings.py`. No baked-in endpoints, regions, or credentials.
+- **State behind ports.** Anything that could become a managed service
+  (conversation history today, vector memory tomorrow) sits behind a port.
+  `ConversationRepository` has an in-memory adapter now; a Postgres or Redis
+  adapter replaces it without touching services.
+- **Ruled out:** provider SDK types outside `adapters/`, cloud-specific
+  queues/caches wired directly into services, credentials fetched anywhere
+  except through config.
+
+## 2. Resilient
+
+Failures are expected — models time out, networks blip. The platform degrades
+in predictable ways instead of hanging or leaking internals.
+
+- **Translate at boundaries.** Adapter failures become `ModelGatewayError`,
+  services translate to `AgentServiceError`, controllers map to HTTP 502.
+  Callers never see raw tracebacks or provider SDK exceptions.
+- **Bound every outbound call.** Timeouts on model requests; `max_tokens`
+  caps generation length (small models can otherwise ramble until the
+  context window ends).
+- **Retry transient failures** with backoff and jitter. Retry policy belongs
+  in `platform/` per the architecture reference (shared technical capability,
+  not business logic). Not yet implemented — see checklist.
+- **Health with teeth.** `/api/health` reports liveness today. A readiness
+  check (model reachable, store writable) is the planned complement — a
+  load balancer should not send traffic to a node whose model is down.
+- **Stateless where it counts.** Gateways are stateless per call, so any
+  instance can serve any request. The one exception is process-local state:
+  the in-memory conversation repo. Multi-instance deployments need a shared
+  `ConversationRepository` adapter — the port already allows it.
+
+## 3. Multiple runtimes
+
+One core, many entry points (architecture reference §8). The HTTP API is one
+controller; a CLI, a chat widget backend, or a scheduled job are others —
+all sharing `services/`, `domain/`, `ports/`, and `tools/` unchanged.
+
+- **Rule:** a new runtime = a new controller + wiring in `main.py`. Never
+  duplicate the core, never bypass the service layer.
+- Controllers stay thin: parse input, call the use case, map the result.
+  All orchestration lives in services.
+
+## 4. Model agnostic
+
+The platform must not care which model answers — local, free-tier, or paid.
+
+- **All model access goes through the `ModelGateway` port.** Provider SDKs
+  appear only in `adapters/`. Services and controllers never import them.
+- **Tools are provider-neutral.** Tool functions are plain Python +
+  `@tool` metadata; each adapter translates them into its runtime's tool
+  format. No provider types in tool code.
+- **Provider selection lives in exactly one place:**
+  `main.build_gateway()`, driven by config. Adding a provider = new adapter
+  + one branch in `main.py`.
+- **Prove it per provider.** Every model adapter gets an integration test
+  against the real provider (see `tests/adapters/`). A provider without a
+  passing integration test is not supported.
+
+## Conformance checklist
+
+| Principle        | Status | Notes                                                                 |
+| ---------------- | ------ | --------------------------------------------------------------------- |
+| Cloud agnostic   | ✅     | No cloud SDKs; Dockerfile; env-only config; state behind ports        |
+| Resilient        | 🟡     | Error translation ✅; bounded calls ✅; retries ❌ (planned `platform/`) |
+|                  |        | Readiness probe ❌; shared store for multi-instance ❌ (port ready)     |
+| Multi-runtime    | ✅     | Controller seam exists; HTTP built, core untouched by design          |
+| Model agnostic   | ✅     | Port + Ollama/Gemini adapters; provider switch only in `main.py`      |
+
+**Legend:** ✅ holds today · 🟡 partially · ❌ planned
