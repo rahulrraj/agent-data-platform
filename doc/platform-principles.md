@@ -83,6 +83,6 @@ The platform must not care which model answers — local, free-tier, or paid.
 |                  |        | (`platform/`); readiness probe ✅; SQLite store ✅ (durable, 1 host)   |
 |                  |        | Multi-instance still needs a Postgres adapter ❌ (port ready)          |
 | Multi-runtime    | ✅     | Controller seam exists; HTTP built, core untouched by design          |
-| Model agnostic   | ✅     | Port + Ollama/Gemini adapters; provider switch only in `main.py`      |
+| Model agnostic   | ✅     | Port + provider adapters × framework switch (strands\|langgraph, ADR 0003) |
 
 **Legend:** ✅ holds today · ❌ planned

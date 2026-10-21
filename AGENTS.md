@@ -29,7 +29,10 @@ controllers/ -> services/ -> ports/        (adapters implement ports)
   `ConversationRepository` (app-owned history). Port errors live beside the
   port (`ModelGatewayError`).
 - `adapters/` — concrete implementations, named `<Technology><PortName>`:
-  `OllamaModelGateway`, `GeminiModelGateway`, `InMemoryConversationRepository`.
+  `OllamaModelGateway`, `GeminiModelGateway`, `LangGraphOllamaGateway`,
+  `LangGraphGeminiGateway` (framework × provider matrix, resolved in
+  `main.py` from `AGENT_FRAMEWORK` × `AGENT_MODEL_PROVIDER`; see ADR 0003),
+  `InMemoryConversationRepository`, `SqliteConversationRepository`.
   Adapters translate provider failures into port errors.
 - `config/` — `settings.py` loads/parses/validates env vars. Nothing else
   reads the environment.
@@ -67,6 +70,10 @@ exceptions as a short ADR instead of silently changing the pattern (§12.10).
   the model reads to decide when to call the tool — make it specific.
 - New model providers: new adapter implementing `ModelGateway`, wired in
   `main.build_gateway()`. Never branch on provider outside `main`.
+- New agent frameworks: new `*GatewayBase` holding the loop/stream/retry
+  mechanics plus per-provider leaves; add to the matrix in `main.py`
+  (ADR 0003). Tools are defined once as Strands @tool functions and
+  translated at the framework boundary — never rewritten per framework.
 - `temperature=0, max_tokens=512` on the Ollama adapter is deliberate — small
   models go off the rails otherwise (runaway generations, echoed tool defs).
 - Retries: adapters classify their own transient errors (`_is_transient`);

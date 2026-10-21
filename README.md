@@ -72,6 +72,7 @@ curl -X POST localhost:8000/api/ask -H 'Content-Type: application/json' \
 | Variable               | Default                  | Description                              |
 | ---------------------- | ------------------------ | ---------------------------------------- |
 | AGENT_MODEL_PROVIDER   | `ollama`                 | `ollama` (local, free) or `gemini`       |
+| AGENT_FRAMEWORK        | `strands`                | `strands` or `langgraph` (ADR 0003)      |
 | OLLAMA_HOST            | `http://localhost:11434` | Ollama server address                    |
 | OLLAMA_MODEL           | `qwen2.5:1.5b`           | Any Ollama model tag                     |
 | GEMINI_MODEL           | `gemini-2.5-flash`       | Gemini model id                          |

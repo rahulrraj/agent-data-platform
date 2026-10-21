@@ -14,6 +14,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Settings:
     provider: str  # "ollama" | "gemini"
+    framework: str  # "strands" | "langgraph"
     ollama_host: str
     ollama_model: str
     gemini_model: str
@@ -33,6 +34,9 @@ class Settings:
         provider = os.environ.get("AGENT_MODEL_PROVIDER", "ollama")
         if provider not in ("ollama", "gemini"):
             raise ValueError(f"AGENT_MODEL_PROVIDER must be 'ollama' or 'gemini', got {provider!r}")
+        framework = os.environ.get("AGENT_FRAMEWORK", "strands")
+        if framework not in ("strands", "langgraph"):
+            raise ValueError(f"AGENT_FRAMEWORK must be 'strands' or 'langgraph', got {framework!r}")
         store = os.environ.get("CONVERSATION_STORE", "memory")
         if store not in ("memory", "sqlite"):
             raise ValueError(f"CONVERSATION_STORE must be 'memory' or 'sqlite', got {store!r}")
@@ -44,6 +48,7 @@ class Settings:
             raise ValueError("DATA_CONNECTIONS must be a JSON object")
         return cls(
             provider=provider,
+            framework=framework,
             ollama_host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
             ollama_model=os.environ.get("OLLAMA_MODEL", "qwen2.5:1.5b"),
             gemini_model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
@@ -63,5 +68,5 @@ class Settings:
 
     def describe_model(self) -> str:
         if self.provider == "gemini":
-            return f"gemini:{self.gemini_model}"
-        return f"ollama:{self.ollama_model}"
+            return f"{self.framework}:gemini:{self.gemini_model}"
+        return f"{self.framework}:ollama:{self.ollama_model}"

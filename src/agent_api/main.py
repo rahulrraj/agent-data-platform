@@ -11,6 +11,8 @@ import uvicorn
 from agent_api.adapters.gemini_model_gateway import GeminiModelGateway
 from agent_api.adapters.gemini_embedding_gateway import GeminiEmbeddingGateway
 from agent_api.adapters.http_capability_executor import HttpCapabilityExecutor
+from agent_api.adapters.langgraph_gemini_gateway import LangGraphGeminiGateway
+from agent_api.adapters.langgraph_ollama_gateway import LangGraphOllamaGateway
 from agent_api.adapters.memory_conversation_repository import InMemoryConversationRepository
 from agent_api.adapters.ollama_model_gateway import OllamaModelGateway
 from agent_api.adapters.ollama_embedding_gateway import OllamaEmbeddingGateway
@@ -34,25 +36,32 @@ def build_gateway(
     tools: list,
     system_prompt: str,
 ) -> ModelGateway:
-    if settings.provider == "gemini":
-        if not settings.gemini_api_key:
-            raise RuntimeError(
-                "GEMINI_API_KEY is not set. Get a free key at "
-                "https://aistudio.google.com/apikey and export GEMINI_API_KEY=<key>."
-            )
-        return GeminiModelGateway(
-            api_key=settings.gemini_api_key,
-            model_id=settings.gemini_model,
-            tools=tools,
-            system_prompt=system_prompt,
-            retry_policy=retry_policy,
+    """Pick the gateway from the framework × provider matrix.
+
+    Only main.py knows the matrix; the service just sees a ModelGateway.
+    """
+    gateway_class = {
+        ("strands", "ollama"): OllamaModelGateway,
+        ("strands", "gemini"): GeminiModelGateway,
+        ("langgraph", "ollama"): LangGraphOllamaGateway,
+        ("langgraph", "gemini"): LangGraphGeminiGateway,
+    }[(settings.framework, settings.provider)]
+    if settings.provider == "gemini" and not settings.gemini_api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not set. Get a free key at "
+            "https://aistudio.google.com/apikey and export GEMINI_API_KEY=<key>."
         )
-    return OllamaModelGateway(
-        host=settings.ollama_host,
-        model_id=settings.ollama_model,
+    kwargs: dict = {}
+    if settings.provider == "gemini":
+        kwargs = {"api_key": settings.gemini_api_key,
+                  "model_id": settings.gemini_model}
+    else:
+        kwargs = {"host": settings.ollama_host, "model_id": settings.ollama_model}
+    return gateway_class(
         tools=tools,
         system_prompt=system_prompt,
         retry_policy=retry_policy,
+        **kwargs,
     )
 
 
