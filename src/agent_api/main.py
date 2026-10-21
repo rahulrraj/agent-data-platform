@@ -9,22 +9,31 @@ from __future__ import annotations
 import uvicorn
 
 from agent_api.adapters.gemini_model_gateway import GeminiModelGateway
+from agent_api.adapters.gemini_embedding_gateway import GeminiEmbeddingGateway
+from agent_api.adapters.http_capability_executor import HttpCapabilityExecutor
 from agent_api.adapters.memory_conversation_repository import InMemoryConversationRepository
 from agent_api.adapters.ollama_model_gateway import OllamaModelGateway
+from agent_api.adapters.ollama_embedding_gateway import OllamaEmbeddingGateway
+from agent_api.adapters.snowflake_capability_executor import SnowflakeCapabilityExecutor
 from agent_api.adapters.sqlite_conversation_repository import SqliteConversationRepository
+from agent_api.adapters.sqlserver_capability_executor import SqlServerCapabilityExecutor
+from agent_api.adapters.yaml_capability_repository import YamlCapabilityRepository
 from agent_api.config.settings import Settings
 from agent_api.controllers.http import create_app
 from agent_api.domain.prompts import build_system_prompt
-from agent_api.domain.tools import load_tools, tool_names
 from agent_api.platform.retry import RetryPolicy
 from agent_api.ports.conversation_repository import ConversationRepository
 from agent_api.ports.model_gateway import ModelGateway
 from agent_api.services.ask_agent import AskAgentService
+from agent_api.tools import ToolDeps, load_tools, tool_names
 
 
-def build_gateway(settings: Settings, retry_policy: RetryPolicy) -> ModelGateway:
-    tools = load_tools()
-    system_prompt = build_system_prompt(tool_names(tools))
+def build_gateway(
+    settings: Settings,
+    retry_policy: RetryPolicy,
+    tools: list,
+    system_prompt: str,
+) -> ModelGateway:
     if settings.provider == "gemini":
         if not settings.gemini_api_key:
             raise RuntimeError(
@@ -53,13 +62,40 @@ def build_repository(settings: Settings) -> ConversationRepository:
     return InMemoryConversationRepository()
 
 
+def build_tool_deps(settings: Settings, retry_policy: RetryPolicy) -> ToolDeps:
+    """Wire the data-capability stack: registry + embeddings + executors."""
+    registry = YamlCapabilityRepository(settings.capabilities_path)
+    if settings.provider == "gemini":
+        embedding_gateway = GeminiEmbeddingGateway(
+            settings.gemini_api_key, settings.gemini_embed_model
+        )
+    else:
+        embedding_gateway = OllamaEmbeddingGateway(
+            settings.ollama_host, settings.ollama_embed_model
+        )
+    connections = settings.data_connections
+    executors = {
+        "http": HttpCapabilityExecutor(connections, retry_policy),
+        "snowflake": SnowflakeCapabilityExecutor(connections, retry_policy),
+        "sqlserver": SqlServerCapabilityExecutor(connections, retry_policy),
+    }
+    return ToolDeps(
+        capability_registry=registry,
+        embedding_gateway=embedding_gateway,
+        capability_executors=executors,
+    )
+
+
 def main() -> None:
     settings = Settings.from_env()
     retry_policy = RetryPolicy(
         max_attempts=settings.retry_max_attempts,
         base_delay=settings.retry_base_delay,
     )
-    gateway = build_gateway(settings, retry_policy)
+    deps = build_tool_deps(settings, retry_policy)
+    tools = load_tools(deps)
+    system_prompt = build_system_prompt(tool_names(tools))
+    gateway = build_gateway(settings, retry_policy, tools, system_prompt)
     conversations = build_repository(settings)
     service = AskAgentService(gateway=gateway, conversations=conversations)
     app = create_app(service, model_label=settings.describe_model())

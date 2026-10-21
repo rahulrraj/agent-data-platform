@@ -56,6 +56,13 @@ exceptions as a short ADR instead of silently changing the pattern (§12.10).
   automatically, `main.py` wires the tools in, and the system prompt names
   them via `build_system_prompt()`. Keep each plugin self-contained; if a
   tool needs outbound I/O later, it must go through a core-owned port (§4).
+- Factory tools: if a tool needs dependencies (registry, gateways), expose
+  `create_tool(deps)` instead of bare functions — see
+  `tools/discover_capability/tool.py`. `ToolDeps` carries what's available;
+  factory plugins are skipped when `load_tools()` gets no deps.
+- Data capabilities: don't write per-entity tools. Declare them in
+  `registry/capabilities.yaml` and let `discover_capability` /
+  `execute_capability` serve them (doc/data-capabilities.md, ADR 0002).
 - Tool functions stay pure and dependency-free; the one-line docstring is what
   the model reads to decide when to call the tool — make it specific.
 - New model providers: new adapter implementing `ModelGateway`, wired in

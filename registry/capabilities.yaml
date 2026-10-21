@@ -1,0 +1,58 @@
+# Data capability registry.
+#
+# Adding an entry here exposes that data to the agent — this file is
+# version-controlled configuration: edits need repo access, review, and deploy.
+#
+# Rules (see doc/data-capabilities.md):
+# - The model supplies parameter VALUES only. Queries, paths, and connections
+#   are fixed here. Never a raw-SQL or raw-URL capability.
+# - mode is "read". Executors refuse anything else.
+# - Select minimal columns — results land in the model's context.
+# - `connection` names a key in DATA_CONNECTIONS (env JSON). Secrets never go
+#   in this file.
+#
+# Parameter placeholders:
+# - snowflake: %(name)s  (bind by name)
+# - sqlserver: ?         (positional, in parameter declaration order)
+# - http: {name} in path; remaining params become query string (GET) or JSON body (POST)
+
+capabilities:
+  - id: customer_by_id
+    description: "Look up a customer's name, tier, and region by customer ID"
+    kind: snowflake
+    connection: snowflake_analytics
+    mode: read
+    parameters:
+      customer_id:
+        type: string
+        required: true
+        description: "Customer ID, e.g. C-123"
+    query: "SELECT name, tier, region FROM dim_customers WHERE customer_id = %(customer_id)s"
+
+  - id: orders_by_customer
+    description: "List a customer's recent orders: order number, date, total, status"
+    kind: sqlserver
+    connection: sqlserver_sales
+    mode: read
+    parameters:
+      customer_id:
+        type: string
+        required: true
+        description: "Customer ID, e.g. C-123"
+    # ? placeholders bind positionally, in parameter declaration order.
+    query: "SELECT TOP 50 order_number, order_date, total, status FROM orders WHERE customer_id = ? ORDER BY order_date DESC"
+
+  - id: order_status
+    description: "Get an order's status and tracking number by order number"
+    kind: http
+    connection: orders_api
+    mode: read
+    parameters:
+      order_number:
+        type: string
+        required: true
+        description: "Order number, e.g. ORD-98765"
+    request:
+      method: GET
+      path: "/orders/{order_number}"
+      fields: [status, tracking_number, eta]

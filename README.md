@@ -19,6 +19,8 @@ src/agent_api/
 doc/
   hexagonal-architecture.md
   platform-principles.md  cloud-agnostic, resilient, multi-runtime, model-agnostic
+  data-capabilities.md    registry-driven org data access (Snowflake/SQL Server/HTTP)
+  adr/                    architecture decision records
 tests/
   services/     use-case tests with fake ports (no model needed)
   controllers/  HTTP boundary tests with a fake service
@@ -78,6 +80,10 @@ curl -X POST localhost:8000/api/ask -H 'Content-Type: application/json' \
 | RETRY_BASE_DELAY       | `0.5`                    | Base backoff delay in seconds (jittered)  |
 | CONVERSATION_STORE     | `memory`                 | `memory` (process-local) or `sqlite`      |
 | SQLITE_PATH            | `conversations.db`       | SQLite file when store is `sqlite`        |
+| CAPABILITIES_PATH      | `registry/capabilities.yaml` | Data capability registry file         |
+| DATA_CONNECTIONS       | `{}`                     | JSON: named data-source connections (see doc/data-capabilities.md) |
+| OLLAMA_EMBED_MODEL     | `nomic-embed-text`       | Embedding model for capability discovery  |
+| GEMINI_EMBED_MODEL     | `text-embedding-004`     | Embedding model when provider is `gemini` |
 | PORT                   | `8000`                   | API port                                 |
 
 ## Docker
