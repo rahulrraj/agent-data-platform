@@ -15,6 +15,16 @@ without hardcoded per-entity tools. See ADR 0002 for the decision record.
 - **execute_capability** — tool. Validates parameters, dispatches to the
   executor for the capability's kind, returns JSON.
 
+## Capability granularity
+
+Capabilities are declared at the granularity of the **questions people
+ask**, not backend tables (ADR 0004). If answering needs a join or a
+fan-out, the API behind the capability does it — the registry holds
+`returns_by_customer`, not `accounts_by_customer` + `account_returns` plus
+a pipeline. There is no composition engine in this layer: discovery returns
+the minimal sufficient set (the one API needed), and the agent loop chains
+capabilities only when no single API covers the need.
+
 ## Registry format
 
 ```yaml
