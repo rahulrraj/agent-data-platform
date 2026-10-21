@@ -14,9 +14,11 @@ src/agent_api/
   domain/                 technology-independent core: conversation, prompt
   tools/                  one folder per tool plugin (auto-discovered, see ADR 0001)
   ports/                  outbound contracts: model_gateway, conversation_repository
-  adapters/               port implementations: ollama/gemini gateways, in-memory repo
+  adapters/               port implementations: ollama/gemini gateways, memory/sqlite repos
+  platform/               shared technical capabilities: retry with backoff
 doc/
-  architecture-reference.md
+  hexagonal-architecture.md
+  platform-principles.md  cloud-agnostic, resilient, multi-runtime, model-agnostic
 tests/
   services/     use-case tests with fake ports (no model needed)
   controllers/  HTTP boundary tests with a fake service
@@ -47,7 +49,8 @@ export AGENT_MODEL_PROVIDER=gemini GEMINI_API_KEY=<key>   # https://aistudio.goo
 
 | Method | Path         | Description                                              |
 | ------ | ------------ | -------------------------------------------------------- |
-| GET    | /api/health  | `{"status": "ok", "model": ...}`                         |
+| GET    | /api/health  | `{"status": "ok", "model": ...}` (liveness)               |
+| GET    | /api/ready   | `{"status": "ready"}` or 503 `{"status": "not_ready", ...}` |
 | POST   | /api/chat    | Streams the reply as Server-Sent Events (text/tool/error)|
 | POST   | /api/ask     | Returns the full reply as JSON: `{reply, tools_used}`    |
 
@@ -71,6 +74,10 @@ curl -X POST localhost:8000/api/ask -H 'Content-Type: application/json' \
 | OLLAMA_MODEL           | `qwen2.5:1.5b`           | Any Ollama model tag                     |
 | GEMINI_MODEL           | `gemini-2.5-flash`       | Gemini model id                          |
 | GEMINI_API_KEY         | —                        | Required when provider is `gemini`       |
+| RETRY_MAX_ATTEMPTS     | `3`                      | Retry attempts for transient model errors |
+| RETRY_BASE_DELAY       | `0.5`                    | Base backoff delay in seconds (jittered)  |
+| CONVERSATION_STORE     | `memory`                 | `memory` (process-local) or `sqlite`      |
+| SQLITE_PATH            | `conversations.db`       | SQLite file when store is `sqlite`        |
 | PORT                   | `8000`                   | API port                                 |
 
 ## Docker

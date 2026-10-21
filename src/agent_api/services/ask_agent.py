@@ -33,6 +33,12 @@ class AgentReply:
     tool_uses: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class ReadinessReport:
+    ready: bool
+    failing: tuple[str, ...] = ()
+
+
 class AskAgentService:
     """The 'ask the agent' use case."""
 
@@ -76,3 +82,16 @@ class AskAgentService:
             raise AgentServiceError(str(exc)) from exc
         conversation.add_assistant("".join(texts), tools)
         self._conversations.save(conversation)
+
+    def readiness(self) -> ReadinessReport:
+        """Check that dependencies are reachable. For load-balancer readiness."""
+        failing: list[str] = []
+        try:
+            self._gateway.ping()
+        except ModelGatewayError as exc:
+            failing.append(f"model: {exc}")
+        try:
+            self._conversations.ping()
+        except Exception as exc:  # noqa: BLE001
+            failing.append(f"store: {exc}")
+        return ReadinessReport(ready=not failing, failing=tuple(failing))

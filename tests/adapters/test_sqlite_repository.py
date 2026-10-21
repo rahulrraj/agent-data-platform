@@ -1,0 +1,51 @@
+"""Adapter tests for the SQLite conversation store: round-trips on a temp file."""
+
+import pytest
+
+from agent_api.adapters.sqlite_conversation_repository import SqliteConversationRepository
+from agent_api.domain.conversation import Conversation
+
+
+@pytest.fixture()
+def repo(tmp_path):
+    return SqliteConversationRepository(str(tmp_path / "test.db"))
+
+
+def test_load_returns_empty_conversation_for_unknown_id(repo):
+    conv = repo.load("nope")
+    assert conv.id == "nope"
+    assert conv.turns == []
+
+
+def test_save_and_load_roundtrip(repo):
+    conv = repo.load("s1")
+    conv.add_user("What is 6 * 7?")
+    conv.add_assistant("42", ["calculate"])
+    repo.save(conv)
+
+    loaded = repo.load("s1")
+    assert [t.content for t in loaded.turns] == ["What is 6 * 7?", "42"]
+    assert loaded.turns[1].tool_uses == ("calculate",)
+
+
+def test_overwrite_replaces_history(repo):
+    conv = repo.load("s1")
+    conv.add_user("first")
+    repo.save(conv)
+    conv2 = repo.load("s1")
+    assert len(conv2.turns) == 1  # fresh object, not the mutated one
+
+
+def test_ping_ok(repo):
+    repo.ping()  # raises nothing
+
+
+def test_data_survives_reopen(tmp_path):
+    path = str(tmp_path / "test.db")
+    repo = SqliteConversationRepository(path)
+    conv = repo.load("s1")
+    conv.add_user("persist me")
+    repo.save(conv)
+
+    repo2 = SqliteConversationRepository(path)
+    assert [t.content for t in repo2.load("s1").turns] == ["persist me"]

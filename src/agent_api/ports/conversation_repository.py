@@ -20,3 +20,7 @@ class ConversationRepository(Protocol):
     def save(self, conversation: Conversation) -> None:
         """Persist the conversation."""
         ...
+
+    def ping(self) -> None:
+        """Cheap writability check; raise when the store is unavailable."""
+        ...

@@ -39,6 +39,13 @@ class FakeService(AskAgentService):
         for tool in self.reply.tool_uses:
             yield StreamChunk(kind="tool", payload=tool)
 
+    def readiness(self):
+        from agent_api.services.ask_agent import ReadinessReport
+
+        if self.error:
+            return ReadinessReport(ready=False, failing=("model: down",))
+        return ReadinessReport(ready=True, failing=())
+
 
 def make_client(**kwargs) -> TestClient:
     return TestClient(create_app(FakeService(**kwargs), model_label="test:model"))
@@ -82,3 +89,17 @@ def test_chat_blank_message_yields_error_event():
     r = make_client().post("/api/chat", json={"message": "  ", "session_id": "s"})
     assert r.status_code == 200  # SSE carries the error as an event
     assert '"type": "error"' in r.text
+
+
+def test_ready_ok():
+    r = make_client().get("/api/ready")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ready"}
+
+
+def test_ready_not_ready_is_503():
+    r = make_client(error=AgentServiceError("model exploded")).get("/api/ready")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "not_ready"
+    assert body["failing"] == ["model: down"]

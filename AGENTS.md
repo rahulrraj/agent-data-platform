@@ -36,9 +36,9 @@ controllers/ -> services/ -> ports/        (adapters implement ports)
 - `main.py` — composition root: the ONLY place that reads Settings and picks
   adapters. No business logic.
 
-Create only the folders the project needs (`workflows/`, `mappers/`,
-`platform/` were deliberately skipped). Record deliberate exceptions as a
-short ADR instead of silently changing the pattern (§12.10).
+Create only the folders the project needs (`workflows/`, `mappers/` were
+deliberately skipped). `platform/` holds retry primitives. Record deliberate
+exceptions as a short ADR instead of silently changing the pattern (§12.10).
 
 ## Running / testing
 
@@ -62,6 +62,12 @@ short ADR instead of silently changing the pattern (§12.10).
   `main.build_gateway()`. Never branch on provider outside `main`.
 - `temperature=0, max_tokens=512` on the Ollama adapter is deliberate — small
   models go off the rails otherwise (runaway generations, echoed tool defs).
+- Retries: adapters classify their own transient errors (`_is_transient`);
+  shared backoff math lives in `platform/retry.py`. Tune via
+  `RETRY_MAX_ATTEMPTS` / `RETRY_BASE_DELAY`.
+- Readiness: `GET /api/ready` (model + store). Liveness stays `GET /api/health`.
+- Conversation store: `CONVERSATION_STORE=memory` (default) or `sqlite`
+  (`SQLITE_PATH`, durable across restarts, single host).
 
 ## Sandbox quirks (this dev VM only)
 

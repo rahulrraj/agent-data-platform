@@ -34,3 +34,8 @@ class ModelGateway(Protocol):
     def stream(self, conversation: Conversation) -> AsyncIterator[StreamChunk]:
         """Same as generate(), but yields text/tool chunks as they arrive."""
         ...
+
+    def ping(self) -> None:
+        """Cheap reachability check; raise ModelGatewayError when the provider
+        is down. Must not run inference (probes are frequent)."""
+        ...

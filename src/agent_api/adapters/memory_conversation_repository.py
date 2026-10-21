@@ -20,3 +20,7 @@ class InMemoryConversationRepository:
 
     def save(self, conversation: Conversation) -> None:
         self._store[conversation.id] = conversation
+
+    def ping(self) -> None:
+        # Process-local dict: nothing to check.
+        return None

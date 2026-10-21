@@ -11,7 +11,7 @@ import json
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from agent_api.services.ask_agent import (
@@ -53,6 +53,16 @@ def create_app(service: AskAgentService, model_label: str) -> FastAPI:
     @app.get("/api/health")
     def health():
         return {"status": "ok", "model": model_label}
+
+    @app.get("/api/ready")
+    def ready():
+        report = service.readiness()
+        if report.ready:
+            return {"status": "ready"}
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "failing": list(report.failing)},
+        )
 
     @app.post("/api/ask", response_model=ChatResponse)
     async def ask(req: ChatRequest):

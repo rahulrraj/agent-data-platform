@@ -36,6 +36,10 @@ class FakeGateway:
         for tool in self.tools:
             yield StreamChunk(kind="tool", payload=tool)
 
+    def ping(self) -> None:
+        if self.fail:
+            raise ModelGatewayError("boom")
+
 
 class FakeRepository:
     """In-memory ConversationRepository."""
@@ -48,6 +52,9 @@ class FakeRepository:
 
     def save(self, conversation: Conversation) -> None:
         self.store[conversation.id] = conversation
+
+    def ping(self) -> None:
+        return None
 
 
 def make_service(**kwargs) -> tuple[AskAgentService, FakeGateway, FakeRepository]:
@@ -101,3 +108,19 @@ def test_ask_stream_yields_chunks_and_saves_history():
     conv = repo.load("s1")
     assert conv.turns[-1].content == "canned reply"
     assert conv.turns[-1].tool_uses == ("calculate",)
+
+
+def test_readiness_ok_when_dependencies_healthy():
+    service, _, _ = make_service()
+    report = service.readiness()
+    assert report.ready is True
+    assert report.failing == ()
+
+
+def test_readiness_reports_failing_model():
+    gateway = FakeGateway()
+    gateway.fail = True
+    service, _, _ = make_service(gateway=gateway)
+    report = service.readiness()
+    assert report.ready is False
+    assert any("model" in f for f in report.failing)

@@ -36,16 +36,16 @@ in predictable ways instead of hanging or leaking internals.
 - **Bound every outbound call.** Timeouts on model requests; `max_tokens`
   caps generation length (small models can otherwise ramble until the
   context window ends).
-- **Retry transient failures** with backoff and jitter. Retry policy belongs
-  in `platform/` per the architecture reference (shared technical capability,
-  not business logic). Not yet implemented — see checklist.
-- **Health with teeth.** `/api/health` reports liveness today. A readiness
-  check (model reachable, store writable) is the planned complement — a
-  load balancer should not send traffic to a node whose model is down.
+- **Retry transient failures** with exponential backoff and jitter, via
+  `platform/retry.py`. Adapters classify their own transient errors; streams
+  retry only before the first chunk is yielded.
+- **Health with teeth.** `/api/health` is liveness; `/api/ready` is readiness
+  (model reachable, store writable) for load balancers.
 - **Stateless where it counts.** Gateways are stateless per call, so any
-  instance can serve any request. The one exception is process-local state:
-  the in-memory conversation repo. Multi-instance deployments need a shared
-  `ConversationRepository` adapter — the port already allows it.
+  instance can serve any request. History durability comes from the store
+  adapter: in-memory (default, process-local) or SQLite (`CONVERSATION_STORE=sqlite`,
+  survives restarts, single host). Multi-instance deployments need a Postgres
+  adapter behind the same port — planned, not built.
 
 ## 3. Multiple runtimes
 
@@ -79,9 +79,10 @@ The platform must not care which model answers — local, free-tier, or paid.
 | Principle        | Status | Notes                                                                 |
 | ---------------- | ------ | --------------------------------------------------------------------- |
 | Cloud agnostic   | ✅     | No cloud SDKs; Dockerfile; env-only config; state behind ports        |
-| Resilient        | 🟡     | Error translation ✅; bounded calls ✅; retries ❌ (planned `platform/`) |
-|                  |        | Readiness probe ❌; shared store for multi-instance ❌ (port ready)     |
+| Resilient        | ✅     | Error translation ✅; bounded calls ✅; retries with backoff ✅        |
+|                  |        | (`platform/`); readiness probe ✅; SQLite store ✅ (durable, 1 host)   |
+|                  |        | Multi-instance still needs a Postgres adapter ❌ (port ready)          |
 | Multi-runtime    | ✅     | Controller seam exists; HTTP built, core untouched by design          |
 | Model agnostic   | ✅     | Port + Ollama/Gemini adapters; provider switch only in `main.py`      |
 
-**Legend:** ✅ holds today · 🟡 partially · ❌ planned
+**Legend:** ✅ holds today · ❌ planned

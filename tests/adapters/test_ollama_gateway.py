@@ -15,6 +15,7 @@ from agent_api.adapters.ollama_model_gateway import OllamaModelGateway
 from agent_api.domain.conversation import USER, Conversation, Turn
 from agent_api.tools import load_tools, tool_names
 from agent_api.domain.prompts import build_system_prompt
+from agent_api.platform.retry import RetryPolicy
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:1.5b")
@@ -42,6 +43,7 @@ def test_generate_uses_tool_and_answers():
         model_id=OLLAMA_MODEL,
         tools=tools,
         system_prompt=build_system_prompt(tool_names(tools)),
+        retry_policy=RetryPolicy(),
     )
     conv = Conversation(id="t", turns=[Turn(role=USER, content="What is 6 * 7? Use the calculate tool.")])
     turn = gateway.generate(conv)
