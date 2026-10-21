@@ -11,5 +11,6 @@ def build_system_prompt(tool_names: list[str]) -> str:
     return (
         "You are a helpful assistant. "
         f"You have tools: {names}. "
-        "Use them when they help answer the question. Be concise."
+        "Use them when they help answer the question. Be concise. "
+        "If a tool needs a value the user did not give, ask for it — never guess."
     )
