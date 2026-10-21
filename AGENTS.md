@@ -19,8 +19,10 @@ controllers/ -> services/ -> ports/        (adapters implement ports)
 - `services/` — use cases. `AskAgentService` depends on ports + domain only.
   Port errors become `AskAgentError` subclasses here (§5).
 - `domain/` — technology-independent: `conversation.py` (Turn/Conversation),
-  `tools.py` (pure @tool functions — no I/O), `prompts.py` (system prompt).
-  Domain imports nothing else.
+  `prompts.py` (system prompt builder). Domain imports nothing else.
+- `tools/` — one folder per tool plugin (`tools/<name>/tool.py`), auto-discovered
+  by `load_tools()`. Top-level rather than under domain/ per ADR 0001
+  (`doc/adr/0001-tools-top-level-folder.md`).
 - `ports/` — outbound contracts: `ModelGateway` (model + tool loop),
   `ConversationRepository` (app-owned history). Port errors live beside the
   port (`ModelGatewayError`).
@@ -47,7 +49,7 @@ short ADR instead of silently changing the pattern (§12.10).
 
 ## Conventions
 
-- New tools: create `domain/plugins/<name>/` with a `tool.py` module exposing
+- New tools: create `tools/<name>/` with a `tool.py` module exposing
   @tool-decorated functions. That's it — `load_tools()` discovers the folder
   automatically, `main.py` wires the tools in, and the system prompt names
   them via `build_system_prompt()`. Keep each plugin self-contained; if a

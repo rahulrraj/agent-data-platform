@@ -4,9 +4,12 @@ Each subfolder of this package is a plugin: a folder with a `tool.py` module
 exposing one or more @tool-decorated functions. Drop a new folder in and it is
 picked up automatically — no registry edits needed.
 
-Plugins live under domain/ because tools are technology-independent
-capabilities. If a future tool needs outbound I/O, it must go through a
-core-owned port (§4) — see AGENTS.md.
+Tools live in this top-level package (rather than domain/) per ADR 0001:
+the architecture reference's Agent profile names model/tool/memory as peer
+building blocks, and `tools/` is where a contributor looks first.
+
+Tool functions must stay technology-independent. If a future tool needs
+outbound I/O, it must go through a core-owned port (§4) — see AGENTS.md.
 """
 
 from __future__ import annotations

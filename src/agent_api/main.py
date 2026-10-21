@@ -13,7 +13,7 @@ from agent_api.adapters.memory_conversation_repository import InMemoryConversati
 from agent_api.adapters.ollama_model_gateway import OllamaModelGateway
 from agent_api.config.settings import Settings
 from agent_api.controllers.http import create_app
-from agent_api.domain.plugins import load_tools, tool_names
+from agent_api.tools import load_tools, tool_names
 from agent_api.domain.prompts import build_system_prompt
 from agent_api.ports.model_gateway import ModelGateway
 from agent_api.services.ask_agent import AskAgentService

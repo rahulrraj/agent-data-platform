@@ -13,7 +13,7 @@ import pytest
 
 from agent_api.adapters.ollama_model_gateway import OllamaModelGateway
 from agent_api.domain.conversation import USER, Conversation, Turn
-from agent_api.domain.plugins import load_tools, tool_names
+from agent_api.tools import load_tools, tool_names
 from agent_api.domain.prompts import build_system_prompt
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")

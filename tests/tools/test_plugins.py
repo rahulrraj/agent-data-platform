@@ -1,6 +1,6 @@
 """Domain tests for the plugin loader (§9): pure discovery logic, no I/O."""
 
-from agent_api.domain.plugins import load_tools, tool_names
+from agent_api.tools import load_tools, tool_names
 
 
 def test_discovers_all_builtin_plugins():
