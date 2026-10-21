@@ -86,6 +86,17 @@ Snowflake accepts `private_key` (preferred) or `password`. SQL Server accepts
    `{"rows": [{"name": "...", "tier": "Gold"}], "truncated": false}`
 4. Model answers.
 
+## What the model sees
+
+Concise and complete — nothing more, nothing less. The model gets: the
+system prompt (tool names + one-line behavior notes), each tool's
+docstring, and discovery results (id, description, parameter schemas with
+types, required flags, and descriptions). It never sees queries, URLs,
+credentials, or connection details. Parameter descriptions are the
+contract the model builds requests from — write them so a value can be
+lifted straight out of a user prompt. If a required value isn't in the
+prompt, the model should ask, not guess.
+
 ## Prerequisites
 
 - The embedding model must exist in the provider: `nomic-embed-text` in
