@@ -47,8 +47,13 @@ short ADR instead of silently changing the pattern (§12.10).
 
 ## Conventions
 
-- New tools: pure function + `@tool` + specific one-line docstring in
-  `domain/tools.py`, registered in `TOOLS`. Keep tools dependency-free.
+- New tools: create `domain/plugins/<name>/` with a `tool.py` module exposing
+  @tool-decorated functions. That's it — `load_tools()` discovers the folder
+  automatically, `main.py` wires the tools in, and the system prompt names
+  them via `build_system_prompt()`. Keep each plugin self-contained; if a
+  tool needs outbound I/O later, it must go through a core-owned port (§4).
+- Tool functions stay pure and dependency-free; the one-line docstring is what
+  the model reads to decide when to call the tool — make it specific.
 - New model providers: new adapter implementing `ModelGateway`, wired in
   `main.build_gateway()`. Never branch on provider outside `main`.
 - `temperature=0, max_tokens=512` on the Ollama adapter is deliberate — small

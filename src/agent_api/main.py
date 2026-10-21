@@ -13,13 +13,15 @@ from agent_api.adapters.memory_conversation_repository import InMemoryConversati
 from agent_api.adapters.ollama_model_gateway import OllamaModelGateway
 from agent_api.config.settings import Settings
 from agent_api.controllers.http import create_app
-from agent_api.domain.prompts import AGENT_SYSTEM_PROMPT
-from agent_api.domain.tools import TOOLS
+from agent_api.domain.plugins import load_tools, tool_names
+from agent_api.domain.prompts import build_system_prompt
 from agent_api.ports.model_gateway import ModelGateway
 from agent_api.services.ask_agent import AskAgentService
 
 
 def build_gateway(settings: Settings) -> ModelGateway:
+    tools = load_tools()
+    system_prompt = build_system_prompt(tool_names(tools))
     if settings.provider == "gemini":
         if not settings.gemini_api_key:
             raise RuntimeError(
@@ -29,14 +31,14 @@ def build_gateway(settings: Settings) -> ModelGateway:
         return GeminiModelGateway(
             api_key=settings.gemini_api_key,
             model_id=settings.gemini_model,
-            tools=TOOLS,
-            system_prompt=AGENT_SYSTEM_PROMPT,
+            tools=tools,
+            system_prompt=system_prompt,
         )
     return OllamaModelGateway(
         host=settings.ollama_host,
         model_id=settings.ollama_model,
-        tools=TOOLS,
-        system_prompt=AGENT_SYSTEM_PROMPT,
+        tools=tools,
+        system_prompt=system_prompt,
     )
 
 

@@ -11,7 +11,8 @@ src/agent_api/
   config/settings.py      load/parse/validate settings (env vars)
   controllers/http.py     inbound HTTP adapter: routes, validation, error mapping
   services/ask_agent.py   the "ask the agent" use case (depends only on ports)
-  domain/                 technology-independent core: conversation, tools, prompt
+  domain/                 technology-independent core: conversation, prompt, plugins/
+  domain/plugins/         one folder per tool plugin (auto-discovered)
   ports/                  outbound contracts: model_gateway, conversation_repository
   adapters/               port implementations: ollama/gemini gateways, in-memory repo
 doc/

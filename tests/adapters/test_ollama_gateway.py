@@ -13,8 +13,8 @@ import pytest
 
 from agent_api.adapters.ollama_model_gateway import OllamaModelGateway
 from agent_api.domain.conversation import USER, Conversation, Turn
-from agent_api.domain.prompts import AGENT_SYSTEM_PROMPT
-from agent_api.domain.tools import TOOLS
+from agent_api.domain.plugins import load_tools, tool_names
+from agent_api.domain.prompts import build_system_prompt
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:1.5b")
@@ -36,8 +36,12 @@ needs_ollama = pytest.mark.skipif(not _ollama_up(), reason="Ollama server not re
 
 @needs_ollama
 def test_generate_uses_tool_and_answers():
+    tools = load_tools()
     gateway = OllamaModelGateway(
-        host=OLLAMA_HOST, model_id=OLLAMA_MODEL, tools=TOOLS, system_prompt=AGENT_SYSTEM_PROMPT
+        host=OLLAMA_HOST,
+        model_id=OLLAMA_MODEL,
+        tools=tools,
+        system_prompt=build_system_prompt(tool_names(tools)),
     )
     conv = Conversation(id="t", turns=[Turn(role=USER, content="What is 6 * 7? Use the calculate tool.")])
     turn = gateway.generate(conv)
