@@ -52,6 +52,15 @@ exceptions as a short ADR instead of silently changing the pattern (§12.10).
 - Tests: `pytest`. Service tests use fake ports, controller tests use a fake
   service — neither needs a model. The adapter test hits real Ollama and
   skips itself when the server is down.
+
+## Project skills
+
+Reusable workflows live in `skills/`, colocated with the repo
+(Claude-Code-style). They are NOT indexed by `muse.skill_search` — read the
+SKILL.md directly when the task matches:
+
+- `skills/capability-generator/` — draft capability YAML from a
+  Swagger/OpenAPI spec: generate, review as user needs, merge, test.
 - Default provider is local Ollama (`qwen2.5:1.5b`). `AGENT_MODEL_PROVIDER=gemini`
   + `GEMINI_API_KEY` switches providers with no code changes.
 

@@ -1,0 +1,5 @@
+name: "capability_generator"
+title: "Capability Generator"
+description: "Generate draft data-capability YAML from a Swagger/OpenAPI spec for the agent-api registry, then review, merge, and test."
+category: "Work and knowledge"
+include_in_prompt: false
