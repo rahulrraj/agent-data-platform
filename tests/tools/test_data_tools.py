@@ -57,6 +57,8 @@ class FakeRegistry:
 
 
 class FakeEmbeddings:
+    model_name = "fake-model"
+
     def embed(self, texts):
         return [
             [1.0, 0.0] if "customer" in t.lower() else [0.0, 1.0]

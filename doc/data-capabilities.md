@@ -114,6 +114,19 @@ contract the model builds requests from — write them so a value can be
 lifted straight out of a user prompt. If a required value isn't in the
 prompt, the model should ask, not guess.
 
+## Embedding cache
+
+At thousands of capabilities, re-embedding every description on each
+restart is a slow cold start and real API cost. Description vectors are
+cached in SQLite (`EMBEDDING_CACHE_PATH`, default `embedding_cache.db`),
+keyed by capability id + embedding model, with a sha256 of the
+description text. Only new or edited descriptions are re-embedded;
+switching embedding models invalidates everything (vectors from different
+models aren't comparable). The cache is best-effort: if it's missing or
+broken, discovery falls back to embedding everything in memory, and a
+failed embedding backend still reports "temporarily unavailable" instead
+of guessing.
+
 ## Prerequisites
 
 - The embedding model must exist in the provider: `nomic-embed-text` in

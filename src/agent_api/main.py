@@ -6,6 +6,8 @@ concrete adapters. No business logic lives here.
 
 from __future__ import annotations
 
+import sys
+
 import uvicorn
 
 from agent_api.adapters.gemini_model_gateway import GeminiModelGateway
@@ -18,6 +20,7 @@ from agent_api.adapters.ollama_model_gateway import OllamaModelGateway
 from agent_api.adapters.ollama_embedding_gateway import OllamaEmbeddingGateway
 from agent_api.adapters.snowflake_capability_executor import SnowflakeCapabilityExecutor
 from agent_api.adapters.sqlite_conversation_repository import SqliteConversationRepository
+from agent_api.adapters.sqlite_embedding_cache import SqliteEmbeddingCache
 from agent_api.adapters.sqlserver_capability_executor import SqlServerCapabilityExecutor
 from agent_api.adapters.yaml_capability_repository import YamlCapabilityRepository
 from agent_api.config.settings import Settings
@@ -88,9 +91,16 @@ def build_tool_deps(settings: Settings, retry_policy: RetryPolicy) -> ToolDeps:
         "snowflake": SnowflakeCapabilityExecutor(connections, retry_policy),
         "sqlserver": SqlServerCapabilityExecutor(connections, retry_policy),
     }
+    try:
+        embedding_cache = SqliteEmbeddingCache(settings.embedding_cache_path)
+    except Exception as exc:  # noqa: BLE001 — discovery works uncached, just slower on cold start
+        print(f"warning: embedding cache unavailable ({exc}); discovery will re-embed each restart",
+              file=sys.stderr)
+        embedding_cache = None
     return ToolDeps(
         capability_registry=registry,
         embedding_gateway=embedding_gateway,
+        embedding_cache=embedding_cache,
         capability_executors=executors,
     )
 

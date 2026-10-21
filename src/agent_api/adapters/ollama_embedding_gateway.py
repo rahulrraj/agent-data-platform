@@ -12,6 +12,10 @@ class OllamaEmbeddingGateway:
         self._host = host.rstrip("/")
         self._model_id = model_id
 
+    @property
+    def model_name(self) -> str:
+        return self._model_id
+
     def embed(self, texts: list[str]) -> list[list[float]]:
         # trust_env=False: the sandbox's no_proxy values break httpx parsing.
         with httpx.Client(trust_env=False, timeout=60) as client:

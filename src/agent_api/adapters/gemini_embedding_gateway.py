@@ -10,6 +10,10 @@ class GeminiEmbeddingGateway:
         self._api_key = api_key
         self._model_id = model_id
 
+    @property
+    def model_name(self) -> str:
+        return self._model_id
+
     def embed(self, texts: list[str]) -> list[list[float]]:
         # Local import: only this adapter needs the google-genai package.
         from google import genai

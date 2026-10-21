@@ -36,6 +36,7 @@ class ToolDeps:
 
     capability_registry: Any | None = None
     embedding_gateway: Any | None = None
+    embedding_cache: Any | None = None
     capability_executors: dict[str, Any] = field(default_factory=dict)
 
 

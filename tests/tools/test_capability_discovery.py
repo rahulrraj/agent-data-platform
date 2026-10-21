@@ -85,6 +85,8 @@ class KeywordEmbeddingGateway:
     (ranking, threshold, single-best-match).
     """
 
+    model_name = "keyword-test"
+
     _STOPWORDS = frozenset(
         "a an the is are was were what which how do does did me my "
         "for of to by in on all get list show look up".split()

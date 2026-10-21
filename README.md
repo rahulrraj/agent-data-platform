@@ -208,6 +208,7 @@ build. See `src/ui/README.md`.
 | RETRY_BASE_DELAY       | `0.5`                    | Base backoff delay in seconds (jittered)             |
 | CONVERSATION_STORE     | `memory`                 | `memory` (process-local) or `sqlite`                 |
 | SQLITE_PATH            | `conversations.db`       | SQLite file when store is `sqlite`                   |
+| EMBEDDING_CACHE_PATH   | `embedding_cache.db`     | SQLite file caching description vectors              |
 | CAPABILITIES_PATH      | `registry/capabilities.yaml` | Data capability registry                         |
 | DATA_CONNECTIONS       | `{}`                     | JSON: named data-source connections (see below)      |
 | PORT                   | `8000`                   | API port                                             |

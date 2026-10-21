@@ -25,6 +25,7 @@ class Settings:
     retry_base_delay: float
     conversation_store: str  # "memory" | "sqlite"
     sqlite_path: str
+    embedding_cache_path: str
     capabilities_path: str
     data_connections: dict  # name -> connection config (JSON in DATA_CONNECTIONS)
     port: int
@@ -59,6 +60,7 @@ class Settings:
             retry_base_delay=float(os.environ.get("RETRY_BASE_DELAY", "0.5")),
             conversation_store=store,
             sqlite_path=os.environ.get("SQLITE_PATH", "conversations.db"),
+            embedding_cache_path=os.environ.get("EMBEDDING_CACHE_PATH", "embedding_cache.db"),
             capabilities_path=os.environ.get(
                 "CAPABILITIES_PATH", "registry/capabilities.yaml"
             ),

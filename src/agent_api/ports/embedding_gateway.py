@@ -12,6 +12,11 @@ from typing import Protocol
 class EmbeddingGateway(Protocol):
     """Outbound port for text embeddings."""
 
+    @property
+    def model_name(self) -> str:
+        """ID of the embedding model, for cache keying."""
+        ...
+
     def embed(self, texts: list[str]) -> list[list[float]]:
         """One vector per input text, in order."""
         ...
