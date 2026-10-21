@@ -1,0 +1,57 @@
+# Self-contained Postgres for the conversation store. Fine for dev and
+# small prod; prefer your cloud's managed Postgres (RDS / Cloud SQL /
+# Azure Database) for real workloads — then drop this file and point
+# POSTGRES_DSN at the managed instance.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: agent-platform
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: agent-platform
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: "agent"
+            - name: POSTGRES_PASSWORD
+              value: "agent"
+            - name: POSTGRES_DB
+              value: "agentdb"
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

@@ -1,0 +1,73 @@
+# Build the image from the repo root first:
+#   docker build -t <registry>/agent-data-platform:latest .
+#   docker push <registry>/agent-data-platform:latest
+# then set spec.template.spec.containers[0].image below.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-api
+  namespace: agent-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: agent-api
+  template:
+    metadata:
+      labels:
+        app: agent-api
+    spec:
+      containers:
+        - name: api
+          image: agent-data-platform:latest # <-- your registry image
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: agent-platform-config
+          env:
+            - name: POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: agent-platform-secrets
+                  key: POSTGRES_DSN
+            - name: DATA_CONNECTIONS
+              valueFrom:
+                secretKeyRef:
+                  name: agent-platform-secrets
+                  key: DATA_CONNECTIONS
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agent-platform-secrets
+                  key: GEMINI_API_KEY
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/ready
+              port: 8000
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-api
+  namespace: agent-platform
+spec:
+  selector:
+    app: agent-api
+  ports:
+    - port: 80
+      targetPort: 8000

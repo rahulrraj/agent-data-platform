@@ -1,0 +1,18 @@
+# Non-secret configuration. Secrets (POSTGRES_DSN, DATA_CONNECTIONS,
+# GEMINI_API_KEY) live in secret.yaml — never commit real values.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-platform-config
+  namespace: agent-platform
+data:
+  AGENT_FRAMEWORK: "strands"
+  AGENT_MODEL_PROVIDER: "ollama"
+  # Point at an in-cluster Ollama, or an external host. The API must reach it.
+  OLLAMA_HOST: "http://ollama:11434"
+  OLLAMA_MODEL: "qwen2.5:1.5b"
+  OLLAMA_EMBED_MODEL: "nomic-embed-text"
+  CONVERSATION_STORE: "postgres"
+  RETRY_MAX_ATTEMPTS: "3"
+  RETRY_BASE_DELAY: "0.5"
+  PORT: "8000"

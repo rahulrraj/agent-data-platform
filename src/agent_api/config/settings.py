@@ -23,8 +23,9 @@ class Settings:
     gemini_embed_model: str
     retry_max_attempts: int
     retry_base_delay: float
-    conversation_store: str  # "memory" | "sqlite"
+    conversation_store: str  # "memory" | "sqlite" | "postgres"
     sqlite_path: str
+    postgres_dsn: str
     embedding_cache_path: str
     capabilities_path: str
     data_connections: dict  # name -> connection config (JSON in DATA_CONNECTIONS)
@@ -39,8 +40,8 @@ class Settings:
         if framework not in ("strands", "langgraph"):
             raise ValueError(f"AGENT_FRAMEWORK must be 'strands' or 'langgraph', got {framework!r}")
         store = os.environ.get("CONVERSATION_STORE", "memory")
-        if store not in ("memory", "sqlite"):
-            raise ValueError(f"CONVERSATION_STORE must be 'memory' or 'sqlite', got {store!r}")
+        if store not in ("memory", "sqlite", "postgres"):
+            raise ValueError(f"CONVERSATION_STORE must be 'memory', 'sqlite' or 'postgres', got {store!r}")
         try:
             data_connections = json.loads(os.environ.get("DATA_CONNECTIONS", "{}"))
         except json.JSONDecodeError as exc:
@@ -60,6 +61,7 @@ class Settings:
             retry_base_delay=float(os.environ.get("RETRY_BASE_DELAY", "0.5")),
             conversation_store=store,
             sqlite_path=os.environ.get("SQLITE_PATH", "conversations.db"),
+            postgres_dsn=os.environ.get("POSTGRES_DSN", ""),
             embedding_cache_path=os.environ.get("EMBEDDING_CACHE_PATH", "embedding_cache.db"),
             capabilities_path=os.environ.get(
                 "CAPABILITIES_PATH", "registry/capabilities.yaml"

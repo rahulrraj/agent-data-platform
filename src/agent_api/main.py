@@ -18,6 +18,9 @@ from agent_api.adapters.langgraph_ollama_gateway import LangGraphOllamaGateway
 from agent_api.adapters.memory_conversation_repository import InMemoryConversationRepository
 from agent_api.adapters.ollama_model_gateway import OllamaModelGateway
 from agent_api.adapters.ollama_embedding_gateway import OllamaEmbeddingGateway
+from agent_api.adapters.postgres_conversation_repository import (
+    PostgresConversationRepository,
+)
 from agent_api.adapters.snowflake_capability_executor import SnowflakeCapabilityExecutor
 from agent_api.adapters.sqlite_conversation_repository import SqliteConversationRepository
 from agent_api.adapters.sqlite_embedding_cache import SqliteEmbeddingCache
@@ -71,6 +74,8 @@ def build_gateway(
 def build_repository(settings: Settings) -> ConversationRepository:
     if settings.conversation_store == "sqlite":
         return SqliteConversationRepository(settings.sqlite_path)
+    if settings.conversation_store == "postgres":
+        return PostgresConversationRepository(settings.postgres_dsn)
     return InMemoryConversationRepository()
 
 

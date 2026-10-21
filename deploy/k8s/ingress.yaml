@@ -1,0 +1,28 @@
+# Routes /api/* to the API and everything else to the React UI.
+# Set ingressClassName to your controller (nginx, gce, alb, ...) and the
+# host to your domain. TLS: add your cert-manager annotations/cluster-issuer.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agent-platform
+  namespace: agent-platform
+spec:
+  ingressClassName: nginx # <-- your ingress controller
+  rules:
+    - host: agent-platform.example.com # <-- your domain
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: agent-api
+                port:
+                  number: 80
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: agent-ui
+                port:
+                  number: 80

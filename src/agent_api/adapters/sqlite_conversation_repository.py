@@ -1,7 +1,8 @@
 """SQLite-backed ConversationRepository (<Technology><PortName>, §2).
 
-Durable across restarts, single host. For true multi-instance deployments,
-add a Postgres adapter behind the same port — the service never changes.
+Durable across restarts, single host. For multi-instance deployments use
+PostgresConversationRepository behind the same port — the service never
+changes.
 """
 
 from __future__ import annotations

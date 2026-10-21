@@ -1,7 +1,7 @@
 [project]
-name = "agent-api"
+name = "agent-data-platform"
 version = "0.1.0"
-description = "Minimal HTTP API that invokes a Strands agent with a few tools"
+description = "Agent platform: HTTP API + React UI, with a registry connecting the agent to organization data"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+postgres = ["psycopg[binary]>=3.1"]
 # Optional per-kind drivers, imported lazily by their adapters:
 #   snowflake = ["snowflake-connector-python>=3.0"]
 #   sqlserver = ["pyodbc>=5.0"]

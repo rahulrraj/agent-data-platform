@@ -201,6 +201,14 @@ cd src/ui && npm install && npm run dev    # http://localhost:5173
 `/api/*` is proxied to the API in dev; set `VITE_API_URL` for a deployed
 build. See `src/ui/README.md`.
 
+## Deploy on Kubernetes
+
+Same manifests on EKS, GKE, AKS, or on-prem — see `deploy/k8s/README.md`.
+Two Deployments (API + nginx-served UI), one Ingress (`/api/*` → API),
+ConfigMap + Secret for env, and a Postgres StatefulSet for the
+conversation store (swap for a managed database in prod). The API image is
+built from the repo-root `Dockerfile`; the UI image from `src/ui/Dockerfile`.
+
 ## Configure
 
 | Variable               | Default                  | Purpose                                              |
@@ -215,8 +223,9 @@ build. See `src/ui/README.md`.
 | GEMINI_EMBED_MODEL     | `text-embedding-004`     | Embedding model when provider is `gemini`            |
 | RETRY_MAX_ATTEMPTS     | `3`                      | Retry attempts for transient failures                |
 | RETRY_BASE_DELAY       | `0.5`                    | Base backoff delay in seconds (jittered)             |
-| CONVERSATION_STORE     | `memory`                 | `memory` (process-local) or `sqlite`                 |
+| CONVERSATION_STORE     | `memory`                 | `memory` (process-local), `sqlite`, or `postgres`        |
 | SQLITE_PATH            | `conversations.db`       | SQLite file when store is `sqlite`                   |
+| POSTGRES_DSN           | —                        | e.g. `postgres://user:pass@host:5432/db` (store `postgres`) |
 | EMBEDDING_CACHE_PATH   | `embedding_cache.db`     | SQLite file caching description vectors              |
 | CAPABILITIES_PATH      | `registry/capabilities.yaml` | Data capability registry                         |
 | DATA_CONNECTIONS       | `{}`                     | JSON: named data-source connections (see below)      |
