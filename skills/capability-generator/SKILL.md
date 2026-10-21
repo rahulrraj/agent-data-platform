@@ -4,7 +4,7 @@ Generate draft data-capability YAML from a Swagger/OpenAPI spec instead of hand-
 
 ## Generate the draft
 
-- Run `~/workspace/gemini-agent/venv/bin/python -m agent_api.capability_import --from swagger --spec <spec-file> --connection <name> --out draft.yaml` from `~/workspace/agent-api`.
+- Run `~/workspace/gemini-agent/venv/bin/python -m agent_api.capability_import --from swagger --spec <spec-file> --connection <name> --out draft.yaml` from `~/workspace/agent-data-platform`.
 - The generator reads OpenAPI 3.x and Swagger 2.0 (JSON or YAML), resolves local `$ref`s, and emits one `http` capability per GET operation.
 - Non-GET operations are reported as skipped, never converted. The platform is read-only.
 - Header and cookie parameters are skipped with a warning. Unmappable parameter types fall back to `string` with a warning.
@@ -25,4 +25,4 @@ Generate draft data-capability YAML from a Swagger/OpenAPI spec instead of hand-
 
 - Append the reviewed entries to `registry/capabilities.yaml`, keeping IDs unique snake_case.
 - Add one or two prompts per new capability to the prompt table in `tests/tools/test_capability_discovery.py`.
-- Run the backend suite from `~/workspace/agent-api` and commit the registry and the test.
+- Run the backend suite from `~/workspace/agent-data-platform` and commit the registry and the test.
