@@ -1,18 +1,29 @@
 # Agent API
 
 A minimal HTTP API that invokes a [Strands](https://strandsagents.com) agent
-with a few tools. Structure mirrors the gemini-agent backend: tools and the
-agent factory live in `agent_api/`, the FastAPI service in `agent_api/server.py`.
+with a few tools. The code follows `doc/architecture-reference.md`
+(hexagonal/clean architecture with DDD tactical patterns — copied from the
+`# Architecture Reference` doc in Drive).
 
 ```
 src/agent_api/
-  config.py   environment-based settings (provider, model, host, port)
-  tools.py    @tool functions (calculate, get_current_time, word_count)
-  agent.py    create_agent() — wires model + prompt + tools
-  server.py   FastAPI app
+  main.py                 composition root: reads config, wires everything, starts
+  config/settings.py      load/parse/validate settings (env vars)
+  controllers/http.py     inbound HTTP adapter: routes, validation, error mapping
+  services/ask_agent.py   the "ask the agent" use case (depends only on ports)
+  domain/                 technology-independent core: conversation, tools, prompt
+  ports/                  outbound contracts: model_gateway, conversation_repository
+  adapters/               port implementations: ollama/gemini gateways, in-memory repo
+doc/
+  architecture-reference.md
 tests/
-  test_api.py end-to-end tests (drive the real agent loop)
+  services/     use-case tests with fake ports (no model needed)
+  controllers/  HTTP boundary tests with a fake service
+  adapters/     integration test against a real Ollama server (skipped if down)
 ```
+
+Dependency direction: `controllers -> services -> ports`, `adapters -> ports`.
+Only `main.py` reads configuration; only `main.py` picks concrete adapters.
 
 ## Quickstart
 
@@ -25,10 +36,9 @@ ollama serve & ollama pull qwen2.5:1.5b
 export AGENT_MODEL_PROVIDER=gemini GEMINI_API_KEY=<key>   # https://aistudio.google.com/apikey
 
 # 2. Run the API
-.venv/bin/python -m agent_api.server        # http://localhost:8000
-# or: uvicorn agent_api.server:app --port 8000
+.venv/bin/python -m agent_api.main        # http://localhost:8000
 
-# 3. Run the tests (needs the model up; the agent tests take ~1 min)
+# 3. Run the tests (service + controller tests need no model)
 .venv/bin/pytest
 ```
 
@@ -36,12 +46,14 @@ export AGENT_MODEL_PROVIDER=gemini GEMINI_API_KEY=<key>   # https://aistudio.goo
 
 | Method | Path         | Description                                              |
 | ------ | ------------ | -------------------------------------------------------- |
-| GET    | /api/health  | `{"status": "ok", "provider": ..., "model": ...}`        |
-| POST   | /api/chat    | Streams the reply as Server-Sent Events (text + tool use)|
+| GET    | /api/health  | `{"status": "ok", "model": ...}`                         |
+| POST   | /api/chat    | Streams the reply as Server-Sent Events (text/tool/error)|
 | POST   | /api/ask     | Returns the full reply as JSON: `{reply, tools_used}`    |
 
 Both POST endpoints take `{"message": "...", "session_id": "..."}`.
-Each `session_id` gets its own agent, so conversation history persists per client.
+Conversation history is owned by the app via the `ConversationRepository`
+port (in-memory adapter by default — swap for a database without touching
+the service).
 
 ```bash
 curl -X POST localhost:8000/api/ask -H 'Content-Type: application/json' \

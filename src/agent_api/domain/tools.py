@@ -1,4 +1,9 @@
-"""Tools available to the agent. Add new @tool functions here and register them in TOOLS."""
+"""Agent capabilities as pure functions.
+
+These tools perform no I/O, so they live in the domain (technology-independent).
+Add new @tool functions here and register them in TOOLS. The gateway adapters
+hand them to the model runtime.
+"""
 
 import math
 from datetime import datetime

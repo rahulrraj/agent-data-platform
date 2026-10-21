@@ -1,6 +1,5 @@
-"""Package entry point."""
+"""Agent API — Strands agent behind HTTP, in hexagonal/clean architecture.
 
-from agent_api.agent import create_agent
-from agent_api.server import app
-
-__all__ = ["app", "create_agent"]
+See doc/architecture-reference.md for the architecture rules this follows.
+Run the service with:  python -m agent_api.main
+"""
