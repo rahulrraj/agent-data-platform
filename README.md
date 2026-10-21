@@ -266,6 +266,9 @@ doc/
 | `doc/hexagonal-architecture.md` | Structure rules: layers, ports, dependency directions (from the original Drive doc) |
 | `doc/platform-principles.md` | Platform qualities: cloud-agnostic, resilient, multi-runtime, model-agnostic + conformance checklist |
 | `doc/data-capabilities.md` | Registry format, discovery/execution flow, guardrails, access model |
+| `doc/agent-lifecycle.md` | ADLC: stages, gates, and the ship checklist |
+| `doc/guardrails.md` | Guardrail catalog — enforced vs. planned, honestly marked |
+| `doc/approvals.md` | Approval matrix, what counts as approval, emergency path |
 | `doc/adr/` | Decision records: 0001 tools folder · 0002 capability registry · 0003 dual frameworks |
 
 ## Principles in one line each

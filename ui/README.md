@@ -36,6 +36,12 @@ VITE_API_URL=https://api.example.com npm run build
   lists. No markdown dependency.
 - Offline banner when the API isn't reachable.
 
+## Tests
+
+```bash
+npm test   # vitest: markdown renderer + SSE client, 16 tests
+```
+
 ## Layout
 
 ```text
