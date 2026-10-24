@@ -217,10 +217,10 @@ built from the repo-root `Dockerfile`; the UI image from `src/ui/Dockerfile`.
 | AGENT_MODEL_PROVIDER   | `ollama`                 | `ollama` (local, free) or `gemini`                   |
 | OLLAMA_HOST            | `http://localhost:11434` | Ollama server address                                |
 | OLLAMA_MODEL           | `qwen2.5:1.5b`           | Chat model for `ollama`                              |
-| GEMINI_MODEL           | `gemini-2.5-flash`       | Chat model for `gemini`                              |
+| GEMINI_MODEL           | `gemini-flash-latest`    | Chat model for `gemini`                              |
 | GEMINI_API_KEY         | —                        | Required when provider is `gemini`                   |
 | OLLAMA_EMBED_MODEL     | `nomic-embed-text`       | Embedding model for capability discovery             |
-| GEMINI_EMBED_MODEL     | `text-embedding-004`     | Embedding model when provider is `gemini`            |
+| GEMINI_EMBED_MODEL     | `gemini-embedding-001`   | Embedding model when provider is `gemini`            |
 | RETRY_MAX_ATTEMPTS     | `3`                      | Retry attempts for transient failures                |
 | RETRY_BASE_DELAY       | `0.5`                    | Base backoff delay in seconds (jittered)             |
 | CONVERSATION_STORE     | `memory`                 | `memory` (process-local), `sqlite`, or `postgres`        |

@@ -6,7 +6,7 @@ from __future__ import annotations
 class GeminiEmbeddingGateway:
     """EmbeddingGateway backed by Gemini's embedding model."""
 
-    def __init__(self, api_key: str, model_id: str = "text-embedding-004") -> None:
+    def __init__(self, api_key: str, model_id: str = "gemini-embedding-001") -> None:
         self._api_key = api_key
         self._model_id = model_id
 
