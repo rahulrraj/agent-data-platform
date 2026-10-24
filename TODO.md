@@ -5,12 +5,13 @@ not in scattered docs. Remove an item when it is done — don't just check it
 off. Items marked **blocked** need something outside this repo before they
 can move.
 
-## In progress (not TODO, but tracked here so nothing gets lost)
+## Done recently (kept here until the next push, so nothing gets lost)
 
-- Terraform + GitHub Actions pipeline: modular Terraform (shared modules +
-  one stack per platform: `aws-lambda` and `aws-eks` now, `gcp` and other
-  clouds later) and per-platform deploy workflows. EKS reuses the existing
-  `deploy/k8s/` manifests. Being built on `feature/initial-platform`.
+- Terraform + GitHub Actions pipeline (commit `0ad2e20`): modular Terraform
+  (shared modules + one stack per platform: `aws-lambda` and `aws-eks` now,
+  `gcp` and other clouds later) and per-platform deploy workflows. EKS
+  reuses the existing `deploy/k8s/` manifests. Validated with
+  `terraform validate` for both stacks; not yet applied to real AWS.
 
 ## Live tests and verification
 
@@ -33,10 +34,17 @@ can move.
 
 ## Deployment and infrastructure
 
-- **First real AWS deployment** — blocked: needs an AWS account + IAM role,
-  ECR push, Lambda function + Function URL, and env vars
-  (`CONVERSATION_STORE=postgres`, `POSTGRES_DSN`, provider + keys). The
-  code for it is the in-progress Terraform/pipeline work above.
+- **First real AWS deployment** — blocked: needs an AWS account + GitHub
+  OIDC identity provider and deploy role (see `deploy/terraform/README.md`
+  for the trust-policy snippet), repo variables/secrets
+  (`AWS_ROLE_TO_ASSUME`, `AWS_REGION`, `TF_VAR_db_password`,
+  `TF_VAR_gemini_api_key`), then merge to `main` or manual dispatch. The
+  deploy workflows fail at the OIDC step until then — expected. EKS
+  additionally needs an NGINX ingress controller installed before the
+  Ingress routes traffic.
+- **EKS hardening follow-ups** — IRSA for Bedrock access from EKS pods;
+  tighten EKS RDS ingress from VPC-CIDR to the node security group;
+  restrict the EKS public API endpoint.
 - **True incremental chat streaming on Lambda** — Mangum buffers the whole
   response, so `/api/chat` on Lambda returns one complete SSE document,
   not incremental tokens. True streaming needs a Function URL in
@@ -52,8 +60,9 @@ can move.
   weighted routing; EKS canary needs an ingress/mesh mechanism (e.g. Argo
   Rollouts/Flagger). Also noted in `deploy/terraform/README.md`.
 - **Push and merge** — commits `9324694` (Bedrock), `6a8e612` (Lambda),
-  and the infra work are local-only on `feature/initial-platform`.
-  Push when Rahul asks; merging the branch is his later call.
+  `1785b50` (TODO doc), and `0ad2e20` (Terraform + pipeline) are
+  local-only on `feature/initial-platform`. Push when Rahul asks; merging
+  the branch is his later call.
 
 ## Capabilities and guardrails
 
