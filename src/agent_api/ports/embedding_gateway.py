@@ -1,7 +1,7 @@
 """EmbeddingGateway: turn text into vectors for semantic capability lookup.
 
 Other-system capability (the embedding model lives outside the app), so it is
-a gateway port. Adapters: Ollama (local), Gemini (free tier).
+a gateway port. Adapters: Ollama (local), Gemini (free tier), Bedrock (Titan).
 """
 
 from __future__ import annotations

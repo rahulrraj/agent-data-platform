@@ -214,13 +214,16 @@ built from the repo-root `Dockerfile`; the UI image from `src/ui/Dockerfile`.
 | Variable               | Default                  | Purpose                                              |
 | ---------------------- | ------------------------ | ---------------------------------------------------- |
 | AGENT_FRAMEWORK        | `strands`                | `strands` or `langgraph` (ADR 0003)                  |
-| AGENT_MODEL_PROVIDER   | `ollama`                 | `ollama` (local, free) or `gemini`                   |
+| AGENT_MODEL_PROVIDER   | `ollama`                 | `ollama` (local, free), `gemini`, or `bedrock`      |
 | OLLAMA_HOST            | `http://localhost:11434` | Ollama server address                                |
 | OLLAMA_MODEL           | `qwen2.5:1.5b`           | Chat model for `ollama`                              |
 | GEMINI_MODEL           | `gemini-flash-latest`    | Chat model for `gemini`                              |
 | GEMINI_API_KEY         | —                        | Required when provider is `gemini`                   |
 | OLLAMA_EMBED_MODEL     | `nomic-embed-text`       | Embedding model for capability discovery             |
 | GEMINI_EMBED_MODEL     | `gemini-embedding-001`   | Embedding model when provider is `gemini`            |
+| AWS_REGION             | `us-east-1`              | AWS region for `bedrock` (or `AWS_REGION` env)       |
+| BEDROCK_MODEL_ID       | `us.anthropic.claude-sonnet-5-5` | Chat model for `bedrock` (cross-region profile) |
+| BEDROCK_EMBED_MODEL    | `amazon.titan-embed-text-v2:0` | Embedding model when provider is `bedrock`    |
 | RETRY_MAX_ATTEMPTS     | `3`                      | Retry attempts for transient failures                |
 | RETRY_BASE_DELAY       | `0.5`                    | Base backoff delay in seconds (jittered)             |
 | CONVERSATION_STORE     | `memory`                 | `memory` (process-local), `sqlite`, or `postgres`        |

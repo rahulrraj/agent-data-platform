@@ -63,6 +63,8 @@ SKILL.md directly when the task matches:
   Swagger/OpenAPI spec: generate, review as user needs, merge, test.
 - Default provider is local Ollama (`qwen2.5:1.5b`). `AGENT_MODEL_PROVIDER=gemini`
   + `GEMINI_API_KEY` switches providers with no code changes.
+  `AGENT_MODEL_PROVIDER=bedrock` uses AWS Bedrock (Strands only, no LangGraph
+  variant yet) with credentials from the standard boto3 chain.
 
 ## Conventions
 

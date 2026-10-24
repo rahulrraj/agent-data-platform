@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Settings:
-    provider: str  # "ollama" | "gemini"
+    provider: str  # "ollama" | "gemini" | "bedrock"
     framework: str  # "strands" | "langgraph"
     ollama_host: str
     ollama_model: str
@@ -21,6 +21,9 @@ class Settings:
     gemini_api_key: str
     ollama_embed_model: str
     gemini_embed_model: str
+    aws_region: str
+    bedrock_model: str
+    bedrock_embed_model: str
     retry_max_attempts: int
     retry_base_delay: float
     conversation_store: str  # "memory" | "sqlite" | "postgres"
@@ -34,8 +37,8 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         provider = os.environ.get("AGENT_MODEL_PROVIDER", "ollama")
-        if provider not in ("ollama", "gemini"):
-            raise ValueError(f"AGENT_MODEL_PROVIDER must be 'ollama' or 'gemini', got {provider!r}")
+        if provider not in ("ollama", "gemini", "bedrock"):
+            raise ValueError(f"AGENT_MODEL_PROVIDER must be 'ollama', 'gemini' or 'bedrock', got {provider!r}")
         framework = os.environ.get("AGENT_FRAMEWORK", "strands")
         if framework not in ("strands", "langgraph"):
             raise ValueError(f"AGENT_FRAMEWORK must be 'strands' or 'langgraph', got {framework!r}")
@@ -57,6 +60,9 @@ class Settings:
             gemini_api_key=os.environ.get("GEMINI_API_KEY", ""),
             ollama_embed_model=os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
             gemini_embed_model=os.environ.get("GEMINI_EMBED_MODEL", "gemini-embedding-001"),
+            aws_region=os.environ.get("AWS_REGION", "us-east-1"),
+            bedrock_model=os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-5-5"),
+            bedrock_embed_model=os.environ.get("BEDROCK_EMBED_MODEL", "amazon.titan-embed-text-v2:0"),
             retry_max_attempts=int(os.environ.get("RETRY_MAX_ATTEMPTS", "3")),
             retry_base_delay=float(os.environ.get("RETRY_BASE_DELAY", "0.5")),
             conversation_store=store,
@@ -73,4 +79,6 @@ class Settings:
     def describe_model(self) -> str:
         if self.provider == "gemini":
             return f"{self.framework}:gemini:{self.gemini_model}"
+        if self.provider == "bedrock":
+            return f"{self.framework}:bedrock:{self.bedrock_model}"
         return f"{self.framework}:ollama:{self.ollama_model}"

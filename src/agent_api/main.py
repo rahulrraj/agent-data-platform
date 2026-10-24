@@ -10,6 +10,8 @@ import sys
 
 import uvicorn
 
+from agent_api.adapters.bedrock_embedding_gateway import BedrockEmbeddingGateway
+from agent_api.adapters.bedrock_model_gateway import BedrockModelGateway
 from agent_api.adapters.gemini_model_gateway import GeminiModelGateway
 from agent_api.adapters.gemini_embedding_gateway import GeminiEmbeddingGateway
 from agent_api.adapters.http_capability_executor import HttpCapabilityExecutor
@@ -46,9 +48,14 @@ def build_gateway(
 
     Only main.py knows the matrix; the service just sees a ModelGateway.
     """
+    if settings.framework == "langgraph" and settings.provider == "bedrock":
+        raise RuntimeError(
+            "LangGraph + Bedrock is not built yet (Strands only for bedrock)."
+        )
     gateway_class = {
         ("strands", "ollama"): OllamaModelGateway,
         ("strands", "gemini"): GeminiModelGateway,
+        ("strands", "bedrock"): BedrockModelGateway,
         ("langgraph", "ollama"): LangGraphOllamaGateway,
         ("langgraph", "gemini"): LangGraphGeminiGateway,
     }[(settings.framework, settings.provider)]
@@ -61,6 +68,9 @@ def build_gateway(
     if settings.provider == "gemini":
         kwargs = {"api_key": settings.gemini_api_key,
                   "model_id": settings.gemini_model}
+    elif settings.provider == "bedrock":
+        kwargs = {"region_name": settings.aws_region,
+                  "model_id": settings.bedrock_model}
     else:
         kwargs = {"host": settings.ollama_host, "model_id": settings.ollama_model}
     return gateway_class(
@@ -85,6 +95,10 @@ def build_tool_deps(settings: Settings, retry_policy: RetryPolicy) -> ToolDeps:
     if settings.provider == "gemini":
         embedding_gateway = GeminiEmbeddingGateway(
             settings.gemini_api_key, settings.gemini_embed_model
+        )
+    elif settings.provider == "bedrock":
+        embedding_gateway = BedrockEmbeddingGateway(
+            settings.aws_region, settings.bedrock_embed_model
         )
     else:
         embedding_gateway = OllamaEmbeddingGateway(
