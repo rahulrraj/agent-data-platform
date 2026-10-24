@@ -1,0 +1,16 @@
+# CI: every push and every pull request, all branches. Test-only — never
+# touches AWS. Deploy workflows call the same reusable workflow first.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    uses: ./.github/workflows/reusable-build-test.yml

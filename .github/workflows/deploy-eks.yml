@@ -1,0 +1,113 @@
+# Deploy the EKS stack. Trigger: push to main, or manual dispatch.
+# Safe to merge before AWS is wired in: the test job runs without AWS,
+# and the deploy job fails at the OIDC auth step until the role exists
+# (see deploy/terraform/README.md for the OIDC prerequisites).
+# The workload stays defined by deploy/k8s/ — this workflow only
+# substitutes the ECR image URLs and the Secret values, then applies.
+name: Deploy (AWS EKS)
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-eks
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/reusable-build-test.yml
+
+  deploy:
+    name: Build, push, apply, deploy manifests (EKS stack)
+    runs-on: ubuntu-latest
+    needs: test
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      PROJECT_NAME: ${{ vars.PROJECT_NAME || 'agent-data-platform' }}
+      ENVIRONMENT: ${{ vars.ENVIRONMENT || 'dev' }}
+      TF_VAR_db_password: ${{ secrets.TF_VAR_db_password }}
+      TF_VAR_gemini_api_key: ${{ secrets.TF_VAR_gemini_api_key }}
+      TF_VAR_data_connections: ${{ secrets.TF_VAR_data_connections }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: azure/setup-kubectl@v4
+
+      - name: Log in to ECR
+        id: ecr
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+          echo "registry=$REGISTRY" >> "$GITHUB_OUTPUT"
+          aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
+            | docker login --username AWS --password-stdin "$REGISTRY"
+
+      - name: Build and push API + UI images
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          API_IMAGE="${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-api:$IMAGE_TAG"
+          UI_IMAGE="${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-ui:$IMAGE_TAG"
+          echo "api_image=$API_IMAGE" >> "$GITHUB_ENV"
+          echo "ui_image=$UI_IMAGE" >> "$GITHUB_ENV"
+          docker build -t "$API_IMAGE" .
+          docker push "$API_IMAGE"
+          docker build -f src/ui/Dockerfile -t "$UI_IMAGE" .
+          docker push "$UI_IMAGE"
+
+      - name: Terraform apply (EKS stack)
+        working-directory: deploy/terraform/stacks/aws-eks
+        run: |
+          terraform init -input=false
+          terraform apply -input=false -auto-approve \
+            -var="project=${{ env.PROJECT_NAME }}" \
+            -var="environment=${{ env.ENVIRONMENT }}"
+
+      - name: Update kubeconfig
+        working-directory: deploy/terraform/stacks/aws-eks
+        run: |
+          CLUSTER=$(terraform output -raw cluster_name)
+          aws eks update-kubeconfig --name "$CLUSTER" --region "${{ env.AWS_REGION }}"
+
+      - name: Deploy manifests (images + Secret from outputs)
+        working-directory: deploy/terraform/stacks/aws-eks
+        env:
+          MODEL_PROVIDER: ${{ vars.MODEL_PROVIDER }}
+        run: |
+          MODEL_PROVIDER="${MODEL_PROVIDER:-gemini}"
+          API_IMAGE="${{ env.api_image }}"
+          UI_IMAGE="${{ env.ui_image }}"
+          DSN=$(terraform output -raw rds_dsn)
+          echo "::add-mask::$DSN"
+          # Temp copies only — the committed manifests keep placeholders.
+          rm -rf /tmp/k8s-deploy && cp -r "$GITHUB_WORKSPACE/deploy/k8s" /tmp/k8s-deploy
+          sed -i "s|agent-data-platform:latest|$API_IMAGE|" /tmp/k8s-deploy/api-deployment.yaml
+          sed -i "s|agent-ui:latest|$UI_IMAGE|" /tmp/k8s-deploy/ui-deployment.yaml
+          sed -i "s|AGENT_MODEL_PROVIDER: \"ollama\"|AGENT_MODEL_PROVIDER: \"$MODEL_PROVIDER\"|" /tmp/k8s-deploy/configmap.yaml
+          # The in-cluster Postgres StatefulSet is NOT applied: RDS (from
+          # Terraform) is the conversation store. The placeholder Secret
+          # is NOT applied either: the real Secret is created below.
+          kubectl apply -f /tmp/k8s-deploy/namespace.yaml \
+                        -f /tmp/k8s-deploy/configmap.yaml \
+                        -f /tmp/k8s-deploy/api-deployment.yaml \
+                        -f /tmp/k8s-deploy/ui-deployment.yaml \
+                        -f /tmp/k8s-deploy/ingress.yaml
+          kubectl -n agent-platform create secret generic agent-platform-secrets \
+            --from-literal=POSTGRES_DSN="$DSN" \
+            --from-literal=DATA_CONNECTIONS="${TF_VAR_data_connections:-{}}" \
+            --from-literal=GEMINI_API_KEY="${TF_VAR_gemini_api_key:-}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n agent-platform rollout status deployment/agent-api
+          kubectl -n agent-platform rollout status deployment/agent-ui

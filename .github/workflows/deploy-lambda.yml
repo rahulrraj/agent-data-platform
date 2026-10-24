@@ -1,0 +1,100 @@
+# Deploy the Lambda stack. Trigger: push to main, or manual dispatch.
+# Safe to merge before AWS is wired in: the test job runs without AWS,
+# and the deploy job fails at the OIDC auth step until the role exists
+# (see deploy/terraform/README.md for the OIDC prerequisites).
+# Project/environment defaults here MUST match the Terraform defaults
+# (project=agent-data-platform, environment=dev) because the image name
+# is built before apply and Terraform constructs the same ECR URL.
+name: Deploy (AWS Lambda)
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-lambda
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/reusable-build-test.yml
+
+  deploy:
+    name: Build, push, apply (Lambda stack)
+    runs-on: ubuntu-latest
+    needs: test
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      PROJECT_NAME: ${{ vars.PROJECT_NAME || 'agent-data-platform' }}
+      ENVIRONMENT: ${{ vars.ENVIRONMENT || 'dev' }}
+      TF_VAR_db_password: ${{ secrets.TF_VAR_db_password }}
+      TF_VAR_gemini_api_key: ${{ secrets.TF_VAR_gemini_api_key }}
+      TF_VAR_data_connections: ${{ secrets.TF_VAR_data_connections }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+          echo "registry=$REGISTRY" >> "$GITHUB_OUTPUT"
+          aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
+            | docker login --username AWS --password-stdin "$REGISTRY"
+
+      - name: Build and push Lambda image
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE="${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-api:$IMAGE_TAG"
+          docker build -f Dockerfile.lambda -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Terraform apply (Lambda stack)
+        working-directory: deploy/terraform/stacks/aws-lambda
+        env:
+          MODEL_PROVIDER: ${{ vars.MODEL_PROVIDER }}
+        run: |
+          MODEL_PROVIDER="${MODEL_PROVIDER:-gemini}"
+          EXTRA_VARS=""
+          if [ "$MODEL_PROVIDER" = "bedrock" ]; then
+            EXTRA_VARS="-var=enable_bedrock_invoke=true"
+          fi
+          terraform init -input=false
+          terraform apply -input=false -auto-approve \
+            -var="project=${{ env.PROJECT_NAME }}" \
+            -var="environment=${{ env.ENVIRONMENT }}" \
+            -var="image_tag=${{ github.sha }}" \
+            -var="model_provider=$MODEL_PROVIDER" \
+            $EXTRA_VARS
+
+      - name: Read stack outputs
+        id: tf-out
+        working-directory: deploy/terraform/stacks/aws-lambda
+        run: |
+          echo "bucket=$(terraform output -raw ui_bucket_name)" >> "$GITHUB_OUTPUT"
+          echo "distribution=$(terraform output -raw ui_distribution_id)" >> "$GITHUB_OUTPUT"
+          echo "function_url=$(terraform output -raw function_url)" >> "$GITHUB_OUTPUT"
+          echo "ui_url=$(terraform output -raw ui_url)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and upload UI
+        working-directory: src/ui
+        run: |
+          npm ci
+          npm run build
+          aws s3 sync dist/ "s3://${{ steps.tf-out.outputs.bucket }}" --delete
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.tf-out.outputs.distribution }}" --paths "/*"
+          echo "Function URL: ${{ steps.tf-out.outputs.function_url }}"
+          echo "UI URL: ${{ steps.tf-out.outputs.ui_url }}"
