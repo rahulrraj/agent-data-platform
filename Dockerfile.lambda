@@ -1,0 +1,27 @@
+# Lambda container image variant of Dockerfile.
+# Same app, plus the Lambda runtime interface client; the handler is the
+# entrypoint. Build with: docker build -f Dockerfile.lambda -t agent-api-lambda .
+FROM python:3.12-slim
+
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY src/ src/
+# The capability registry must be inside the image: Lambda has no volume
+# mounts, and CAPABILITIES_PATH defaults to registry/capabilities.yaml.
+COPY registry/ registry/
+RUN pip install --no-cache-dir ".[postgres,lambda]"
+
+# The container needs to reach a model and a Postgres store, e.g.:
+#   -e CONVERSATION_STORE=postgres -e POSTGRES_DSN=...
+#   -e AGENT_MODEL_PROVIDER=gemini -e GEMINI_API_KEY=...
+# or -e AGENT_MODEL_PROVIDER=bedrock -e AWS_REGION=us-east-1
+# (Bedrock credentials come from the Lambda execution role — no key in env.)
+# Embedding cache: -e EMBEDDING_CACHE_PATH=/tmp/embedding_cache.db
+# (/tmp is the only writable directory; the cache rebuilds on cold start.)
+# Serve /api/chat through a Function URL only — API Gateway's 29s
+# integration timeout cannot serve agent turns that run minutes.
+
+# Custom base images run the runtime interface client as entrypoint; the
+# handler (module.function) is passed as CMD.
+ENTRYPOINT ["python", "-m", "awslambdaric"]
+CMD ["agent_api.controllers.lambda_handler.handler"]

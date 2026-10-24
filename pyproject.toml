@@ -21,6 +21,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 postgres = ["psycopg[binary]>=3.1"]
+# Lambda entrypoint (controllers/lambda_handler.py + Dockerfile.lambda):
+# Mangum translates Lambda events to the ASGI app; the runtime interface
+# client provides `python -m awslambdaric`, the entrypoint for custom base
+# images. The RIC could not be verified from the sandbox pip index, so it
+# is left unpinned; Mangum 0.22 is what the handler tests run against.
+lambda = ["mangum>=0.22", "awslambda-python-runtime-interface-client"]
 # Optional per-kind drivers, imported lazily by their adapters:
 #   snowflake = ["snowflake-connector-python>=3.0"]
 #   sqlserver = ["pyodbc>=5.0"]

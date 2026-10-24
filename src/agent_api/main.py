@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 
 import uvicorn
+from fastapi import FastAPI
 
 from agent_api.adapters.bedrock_embedding_gateway import BedrockEmbeddingGateway
 from agent_api.adapters.bedrock_model_gateway import BedrockModelGateway
@@ -124,8 +125,14 @@ def build_tool_deps(settings: Settings, retry_policy: RetryPolicy) -> ToolDeps:
     )
 
 
-def main() -> None:
-    settings = Settings.from_env()
+def build_app(settings: Settings | None = None) -> FastAPI:
+    """Construct the ASGI app without starting a server.
+
+    main() runs it under uvicorn; the Lambda inbound adapter
+    (controllers/lambda_handler.py) needs the same app object without a
+    server process, so construction lives here, not in main().
+    """
+    settings = settings or Settings.from_env()
     retry_policy = RetryPolicy(
         max_attempts=settings.retry_max_attempts,
         base_delay=settings.retry_base_delay,
@@ -136,7 +143,12 @@ def main() -> None:
     gateway = build_gateway(settings, retry_policy, tools, system_prompt)
     conversations = build_repository(settings)
     service = AskAgentService(gateway=gateway, conversations=conversations)
-    app = create_app(service, model_label=settings.describe_model())
+    return create_app(service, model_label=settings.describe_model())
+
+
+def main() -> None:
+    settings = Settings.from_env()
+    app = build_app(settings)
     uvicorn.run(app, host="0.0.0.0", port=settings.port)
 
 

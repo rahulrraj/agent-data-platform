@@ -96,6 +96,13 @@ SKILL.md directly when the task matches:
 - Readiness: `GET /api/ready` (model + store). Liveness stays `GET /api/health`.
 - Conversation store: `CONVERSATION_STORE=memory` (default) or `sqlite`
   (`SQLITE_PATH`, durable across restarts, single host).
+- AWS Lambda: `controllers/lambda_handler.py` is a Mangum adapter over the
+  same FastAPI app (built via `main.build_app()`); image in
+  `Dockerfile.lambda`. On Lambda, `CONVERSATION_STORE` must be `postgres`
+  and `EMBEDDING_CACHE_PATH` must point at `/tmp`. `/api/chat` is
+  buffered SSE there (Mangum buffers the whole body) and must be served
+  through a Function URL — API Gateway's 29s timeout cannot serve it.
+  True incremental streaming is a documented follow-up, not implemented.
 
 ## Sandbox quirks (this dev VM only)
 

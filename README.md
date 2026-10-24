@@ -209,6 +209,63 @@ ConfigMap + Secret for env, and a Postgres StatefulSet for the
 conversation store (swap for a managed database in prod). The API image is
 built from the repo-root `Dockerfile`; the UI image from `src/ui/Dockerfile`.
 
+## Run on AWS Lambda
+
+The API also runs as a Lambda container image. The entrypoint is
+`agent_api.controllers.lambda_handler.handler` (a Mangum adapter over the
+same FastAPI app — no business-logic, tool, or provider changes). The UI
+does not run on Lambda; serve it from S3 + CloudFront.
+
+```bash
+# Build the Lambda image (Dockerfile.lambda) and push it to ECR
+docker build -f Dockerfile.lambda -t agent-api-lambda .
+aws ecr get-login-password --region us-east-1 \
+  | docker login --username AWS --password-stdin <account>.dkr.ecr.us-east-1.amazonaws.com
+docker tag agent-api-lambda:latest <account>.dkr.ecr.us-east-1.amazonaws.com/agent-api-lambda:latest
+docker push <account>.dkr.ecr.us-east-1.amazonaws.com/agent-api-lambda:latest
+
+# Create the function with a Function URL (auth NONE or AWS_IAM as needed)
+aws lambda create-function --function-name agent-api \
+  --package-type Image \
+  --code ImageUri=<account>.dkr.ecr.us-east-1.amazonaws.com/agent-api-lambda:latest \
+  --role arn:aws:iam::<account>:role/agent-api-lambda-role \
+  --timeout 900 --memory-size 1024
+aws lambda create-function-url-config --function-name agent-api \
+  --auth-type NONE --invoke-mode RESPONSE_STREAM
+```
+
+Required env vars on the function (the app is already env-driven, so no
+code changes are needed for Lambda):
+
+| Variable             | Value / note                                              |
+| -------------------- | --------------------------------------------------------- |
+| `CONVERSATION_STORE` | `postgres` — required. `memory` loses history every invocation; a sqlite file under `/tmp` is visible to only one execution environment. |
+| `POSTGRES_DSN`       | Managed Postgres (e.g. RDS) the function can reach.       |
+| `AGENT_MODEL_PROVIDER` | `gemini` or `bedrock` (Ollama is not reachable from Lambda). |
+| `GEMINI_API_KEY`     | Required when provider is `gemini` (store in Secrets Manager or as an encrypted env var, never in the image). |
+| `AWS_REGION`         | e.g. `us-east-1`; Bedrock credentials come from the Lambda execution role — no key in env. |
+| `EMBEDDING_CACHE_PATH` | `/tmp/embedding_cache.db` — `/tmp` is the only writable directory. |
+| `CAPABILITIES_PATH`  | `registry/capabilities.yaml` (already inside the image).  |
+
+Streaming facts, stated plainly:
+
+- **API Gateway cannot serve `/api/chat`.** Its integration timeout is
+  29 seconds while an agent turn runs minutes, and it does not
+  progressively stream responses. Serve chat through the Function URL
+  (15-minute timeout) only. Health, ask, and ready fit either front door.
+- **Chat on Lambda is buffered, not incrementally streamed.** Mangum
+  buffers the whole ASGI response body, so `/api/chat` returns one
+  complete SSE document (all `data:` lines, then `data: [DONE]`) instead
+  of line-by-line. The body is still valid SSE and the UI parses it the
+  same way; only incremental display is lost. True incremental
+  streaming (Function URL in `RESPONSE_STREAM` mode plus a streaming
+  runtime path) is a documented follow-up, not implemented here.
+- **Embedding cache rebuilds on cold start.** The sqlite cache lives in
+  `/tmp`, so a cold start re-embeds every capability description (at
+  thousands of capabilities, thousands of embedding calls) before the
+  first discovery. A shared cache (e.g. ElastiCache/Redis) is the
+  follow-up; it is not built here.
+
 ## Configure
 
 | Variable               | Default                  | Purpose                                              |
