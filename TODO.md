@@ -78,6 +78,13 @@ can move.
 - **Recorded eval set for behavior changes** — planned (see
   `doc/agent-lifecycle.md`).
 
+## Agent interoperability
+
+- **A2A (Agent2Agent) support** — let this platform's agent interoperate
+  with other agents via Google's A2A protocol. Scope to be decided:
+  server side (expose an agent card, accept A2A tasks/messages), client
+  side (discover and delegate to remote A2A agents), or both.
+
 ## Platform hardening
 
 - **Circuit breaker, API rate limiting, failover testing** — planned,
