@@ -203,3 +203,122 @@ def test_path_value_with_slash_allowed_when_opted_in(monkeypatch):
     )
     executor.execute(cap, {"order_number": "a/b"})
     assert client.last_url == "https://api.example.com/orders/a/b"
+
+
+# --- m-4 / m-8 / m-14 / response-shape nits (2026-10-25) ---
+
+
+def test_private_base_url_refused_at_construction():
+    with pytest.raises(CapabilityExecutorError, match="not a public address"):
+        HttpCapabilityExecutor(
+            {"orders_api": {"base_url": "https://127.0.0.1:9000"}},
+            RetryPolicy(max_attempts=1),
+        )
+    with pytest.raises(CapabilityExecutorError, match="must use https"):
+        HttpCapabilityExecutor(
+            {"orders_api": {"base_url": "http://api.example.com"}},
+            RetryPolicy(max_attempts=1),
+        )
+    # Explicit dev opt-in passes validation.
+    HttpCapabilityExecutor(
+        {"orders_api": {"base_url": "http://127.0.0.1:9000",
+                        "allow_private_base_url": True}},
+        RetryPolicy(max_attempts=1),
+    )
+
+
+def test_upstream_error_body_not_returned_to_model(monkeypatch):
+    executor, client = _sequence_executor(monkeypatch, [500], max_attempts=1)
+    # _SequenceClient returns a dict payload; its str() is the "body".
+    with pytest.raises(CapabilityExecutorError) as excinfo:
+        executor.execute(ORDER_CAP, {"order_number": "ORD-1"})
+    assert "shipped" not in str(excinfo.value)
+    assert "http 500" in str(excinfo.value)
+
+
+class _RawClient:
+    """httpx.Client stub returning one canned raw response."""
+
+    def __init__(self, response):
+        self._response = response
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def get(self, url, headers=None, params=None):
+        return self._response
+
+    def post(self, url, headers=None, json=None):
+        return self._response
+
+
+class _RawResponse:
+    def __init__(self, status_code, text, payload=None, json_raises=False):
+        self.status_code = status_code
+        self.text = text
+        self._payload = payload
+        self._json_raises = json_raises
+
+    def json(self):
+        if self._json_raises:
+            raise ValueError("not JSON")
+        return self._payload
+
+
+def _raw_executor(monkeypatch, response):
+    client = _RawClient(response)
+
+    class _ClientFactory:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return client
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(httpx, "Client", _ClientFactory)
+    return HttpCapabilityExecutor(CONNECTIONS, RetryPolicy(max_attempts=1))
+
+
+def test_empty_204_returns_none_not_crash(monkeypatch):
+    executor = _raw_executor(monkeypatch, _RawResponse(204, ""))
+    assert executor.execute(ORDER_CAP, {"order_number": "ORD-1"}) == {"data": None}
+
+
+def test_non_json_200_returned_as_text(monkeypatch):
+    executor = _raw_executor(
+        monkeypatch, _RawResponse(200, "plain text", json_raises=True)
+    )
+    assert executor.execute(ORDER_CAP, {"order_number": "ORD-1"}) == {"data": "plain text"}
+
+
+def test_list_result_capped_and_fields_trim_items(monkeypatch):
+    cap = Capability(
+        id="orders", description="x", kind="http", connection="orders_api",
+        mode="read", parameters=(),
+        spec={"request": {"method": "GET", "path": "/orders",
+                          "fields": ["status"]}},
+    )
+    payload = [{"status": f"s{i}", "secret_note": "x"} for i in range(60)]
+    executor = _raw_executor(monkeypatch, _RawResponse(200, "x", payload))
+    result = executor.execute(cap, {})
+    assert result["truncated"] is True
+    assert len(result["data"]) == 50
+    assert result["data"][0] == {"status": "s0"}
+
+
+def test_malformed_path_template_not_missing_parameter(monkeypatch):
+    executor, client = _sequence_executor(monkeypatch, [200])
+    cap = Capability(
+        id="x", description="x", kind="http", connection="orders_api",
+        mode="read", parameters=(),
+        spec={"request": {"method": "GET", "path": "/orders/{order_number"}},
+    )
+    with pytest.raises(CapabilityExecutorError, match="invalid path template"):
+        executor.execute(cap, {})
+    assert client.calls == 0

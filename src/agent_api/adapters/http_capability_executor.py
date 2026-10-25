@@ -13,6 +13,11 @@ Registry `request` spec:
 GET: params not used in the path become query-string params.
 POST: params become the JSON body.
 
+Connection targets are validated at construction (m-4): https-only,
+no loopback/private/reserved hosts unless the connection opts in with
+allow_private_base_url (local dev). List results are capped at 50 with
+a `truncated` flag, mirroring the SQL path (m-14).
+
 Read-only enforcement: `mode: read` allows GET only. A POST under
 `mode: read` is refused here even though the HTTP executor supports POST
 in principle — with M-7's SQL guard, that makes retried turns safe by
@@ -22,10 +27,29 @@ capability, so re-running a turn cannot double-apply a side effect.
 
 from __future__ import annotations
 
+import ipaddress
+import logging
+import re
 import string
 import urllib.parse
 
 import httpx
+
+logger = logging.getLogger(__name__)
+
+# m-8: secret-looking fragments are masked before any error text is
+# logged or returned; the model-facing message never carries an upstream
+# response body at all (see execute()).
+_REDACT_PATTERNS = (
+    re.compile(r"(password|passwd|api[_-]?key|secret|token|authorization)(\s*[:=]\s*)\S+", re.I),
+    re.compile(r"(Bearer\s+)\S+", re.I),
+)
+
+
+def _redact(text: str) -> str:
+    for pattern in _REDACT_PATTERNS:
+        text = pattern.sub(r"\1***", text)
+    return text
 
 from agent_api.domain.capability import Capability
 from agent_api.platform.retry import RetryPolicy, call_with_retry
@@ -45,7 +69,9 @@ class HttpStatusError(Exception):
     """
 
     def __init__(self, status_code: int, body: str) -> None:
-        super().__init__(f"http {status_code}: {body[:200]}")
+        # Message carries the status only (m-8); the body lives on
+        # .body for the server-side log in execute(), never for the model.
+        super().__init__(f"http {status_code}")
         self.status_code = status_code
         self.body = body
 
@@ -53,9 +79,61 @@ class HttpStatusError(Exception):
 class HttpCapabilityExecutor(CapabilityExecutor):
     """CapabilityExecutor calling REST APIs."""
 
+    max_results = 50  # m-14: same cap as the SQL path (sql_base.max_rows)
+
     def __init__(self, connections: dict, retry_policy: RetryPolicy) -> None:
         self._connections = connections
         self._retry = retry_policy
+        for name, config in connections.items():
+            if isinstance(config, dict) and "base_url" in config:
+                self._validate_base_url(name, config)
+
+    @staticmethod
+    def _validate_base_url(name: str, config: dict) -> None:
+        """Fail fast on unsafe connection targets (m-4).
+
+        The runtime user cannot set base_url — only env/registry editors
+        can — so this is defense in depth for the day that assumption
+        weakens, or a base_url is ever derived from a spec. https-only;
+        loopback/link-local/private/reserved IPs and localhost names
+        are refused unless the connection explicitly opts in with
+        allow_private_base_url (local dev only). Hostnames that are not
+        literal IPs cannot be checked without DNS resolution, so a
+        private hostname is not caught here — that limitation is
+        documented, not hidden.
+        """
+        url = config["base_url"]
+        parsed = urllib.parse.urlparse(str(url))
+        allow_private = bool(config.get("allow_private_base_url"))
+        if parsed.scheme != "https" and not allow_private:
+            raise CapabilityExecutorError(
+                f"connection '{name}': base_url must use https "
+                f"(got scheme {parsed.scheme!r}); set "
+                "allow_private_base_url=true only for local dev"
+            )
+        host = parsed.hostname
+        if not host:
+            raise CapabilityExecutorError(
+                f"connection '{name}': base_url {url!r} has no host"
+            )
+        if (host == "localhost" or host.endswith((".localhost", ".local"))) and not allow_private:
+            raise CapabilityExecutorError(
+                f"connection '{name}': base_url host {host!r} is local; "
+                "set allow_private_base_url=true only for local dev"
+            )
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            return  # hostname: not resolvable here without DNS; see docstring
+        if (
+            ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+        ) and not allow_private:
+            raise CapabilityExecutorError(
+                f"connection '{name}': base_url host {host!r} is not a "
+                "public address; set allow_private_base_url=true only "
+                "for local dev"
+            )
 
     @property
     def kind(self) -> str:
@@ -104,9 +182,23 @@ class HttpCapabilityExecutor(CapabilityExecutor):
         except CapabilityExecutorError:
             raise
         except HttpStatusError as exc:
-            raise CapabilityExecutorError(str(exc)) from exc
+            # m-8: the model/user gets the status only. The upstream
+            # body (which can carry server names, fragments, or data)
+            # goes to the server log, redacted — never into the turn.
+            logger.warning(
+                "http capability %s: upstream http %s: %s",
+                capability.id, exc.status_code, _redact(exc.body[:200]),
+            )
+            raise CapabilityExecutorError(
+                f"http call failed: upstream returned http {exc.status_code}"
+            ) from exc
         except Exception as exc:  # noqa: BLE001
-            raise CapabilityExecutorError(f"http call failed: {exc}") from exc
+            logger.warning(
+                "http capability %s failed: %s", capability.id, _redact(str(exc))
+            )
+            raise CapabilityExecutorError(
+                f"http call failed: {_redact(str(exc))}"
+            ) from exc
 
     def _execute_once(
         self, capability: Capability, params: dict, config: dict
@@ -119,11 +211,20 @@ class HttpCapabilityExecutor(CapabilityExecutor):
         # URL (e.g. "../admin" or "x?admin=true"). A "/" in a value is
         # refused outright unless the capability explicitly opts that
         # parameter into multi-segment paths.
-        path_params = {
-            field_name
-            for _, field_name, _, _ in string.Formatter().parse(path_template)
-            if field_name
-        }
+        # A malformed template (e.g. an unbalanced "{") is a registry
+        # bug, not a missing parameter: report it as such instead of
+        # mislabeling it (nit). Literal "{{...}}" escapes parse to no
+        # field, so they stay literal — they are not parameters.
+        try:
+            path_params = {
+                field_name
+                for _, field_name, _, _ in string.Formatter().parse(path_template)
+                if field_name
+            }
+        except ValueError as exc:
+            raise CapabilityExecutorError(
+                f"invalid path template {path_template!r}: {exc}"
+            ) from exc
         multi_segment = set(request.get("multi_segment_params") or [])
         encoded: dict[str, str] = {}
         for name in path_params:
@@ -143,6 +244,10 @@ class HttpCapabilityExecutor(CapabilityExecutor):
             path = path_template.format(**encoded)
         except KeyError as exc:
             raise CapabilityExecutorError(f"missing path parameter: {exc}") from exc
+        except ValueError as exc:
+            raise CapabilityExecutorError(
+                f"invalid path template {path_template!r}: {exc}"
+            ) from exc
         url = config["base_url"].rstrip("/") + path
         headers = dict(config.get("headers") or {})
         if config.get("api_key"):
@@ -164,8 +269,30 @@ class HttpCapabilityExecutor(CapabilityExecutor):
             if response.status_code >= 400:
                 # Status-carrying error: _is_transient retries 429/5xx.
                 raise HttpStatusError(response.status_code, response.text)
-        data = response.json()
+        # 204 / empty body / non-JSON 200 used to raise from
+        # response.json() (nit): an empty upstream answer is data
+        # (None), and a non-JSON body is returned as text, not a crash.
+        body_text = getattr(response, "text", "") or ""
+        if response.status_code == 204 or not body_text.strip():
+            return {"data": None}
+        try:
+            data = response.json()
+        except ValueError:
+            return {"data": body_text}
         fields = request.get("fields")
+        if isinstance(data, list):
+            # m-14: lists get the same cap as SQL rows, and `fields`
+            # trims list items too (previously it trimmed only dicts,
+            # so a list of thousands of objects entered context whole).
+            items = data
+            if fields:
+                items = [
+                    {k: item.get(k) for k in fields}
+                    if isinstance(item, dict) else item
+                    for item in items
+                ]
+            truncated = len(items) > self.max_results
+            return {"data": items[: self.max_results], "truncated": truncated}
         if fields and isinstance(data, dict):
             data = {k: data.get(k) for k in fields}
         return {"data": data}

@@ -17,9 +17,12 @@ Parameter styles differ per driver (documented per adapter):
 
 from __future__ import annotations
 
+import logging
 import re
 
 from agent_api.domain.capability import Capability
+
+logger = logging.getLogger(__name__)
 from agent_api.platform.retry import RetryPolicy, call_with_retry
 from agent_api.ports.capability_executor import (
     CapabilityExecutor,
@@ -121,7 +124,17 @@ class SqlExecutorBase(CapabilityExecutor):
         except CapabilityExecutorError:
             raise
         except Exception as exc:  # noqa: BLE001
-            raise CapabilityExecutorError(f"{self.kind} query failed: {exc}") from exc
+            # m-8: driver error text can carry server names, SQL
+            # fragments, or upstream data. The model/user gets a
+            # generic failure; the detail goes to the server log only.
+            logger.warning(
+                "%s capability %s query failed: %s",
+                self.kind, capability.id, exc,
+            )
+            raise CapabilityExecutorError(
+                f"{self.kind} query failed for capability "
+                f"'{capability.id}'"
+            ) from exc
 
     def _execute_once(
         self, capability: Capability, params: dict, query: str
