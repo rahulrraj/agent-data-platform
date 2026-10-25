@@ -33,6 +33,8 @@ class Settings:
     capabilities_path: str
     data_connections: dict  # name -> connection config (JSON in DATA_CONNECTIONS)
     port: int
+    cors_origins: tuple[str, ...]  # from CORS_ORIGINS, comma-separated;
+        # empty = same-origin only (no cross-origin browser access)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -45,8 +47,14 @@ class Settings:
         store = os.environ.get("CONVERSATION_STORE", "memory")
         if store not in ("memory", "sqlite", "postgres"):
             raise ValueError(f"CONVERSATION_STORE must be 'memory', 'sqlite' or 'postgres', got {store!r}")
+        # An empty DATA_CONNECTIONS (e.g. an unset GitHub secret expanding
+        # to "") means "no data connections", not invalid JSON: treating
+        # "" as "{}" keeps a no-connections deploy bootable.
+        raw_connections = os.environ.get("DATA_CONNECTIONS", "{}")
+        if not raw_connections.strip():
+            raw_connections = "{}"
         try:
-            data_connections = json.loads(os.environ.get("DATA_CONNECTIONS", "{}"))
+            data_connections = json.loads(raw_connections)
         except json.JSONDecodeError as exc:
             raise ValueError(f"DATA_CONNECTIONS is not valid JSON: {exc}") from exc
         if not isinstance(data_connections, dict):
@@ -74,6 +82,11 @@ class Settings:
             ),
             data_connections=data_connections,
             port=int(os.environ.get("PORT", "8000")),
+            cors_origins=tuple(
+                origin.strip()
+                for origin in os.environ.get("CORS_ORIGINS", "").split(",")
+                if origin.strip()
+            ),
         )
 
     def describe_model(self) -> str:

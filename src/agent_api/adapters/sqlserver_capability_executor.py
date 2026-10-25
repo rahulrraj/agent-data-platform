@@ -52,5 +52,26 @@ class SqlServerCapabilityExecutor(SqlExecutorBase):
         return isinstance(exc, (pyodbc.OperationalError, pyodbc.InterfaceError))
 
     def _placeholders(self, capability: Capability, params: dict):
-        ordered = [params[p.name] for p in capability.parameters if p.name in params]
-        return capability.spec["query"], ordered
+        # Build over ALL declared parameters, in declaration order, so a
+        # missing optional never compresses later values onto earlier
+        # placeholders (the old code did exactly that: a missing optional
+        # mid-list silently misbound every later argument). A missing
+        # required parameter fails closed here instead of reaching the
+        # driver, and the placeholder count must match the argument count.
+        ordered = []
+        for p in capability.parameters:
+            if p.name in params:
+                ordered.append(params[p.name])
+            elif p.required:
+                raise CapabilityExecutorError(
+                    f"missing required parameter: {p.name}"
+                )
+            else:
+                ordered.append(None)
+        query = capability.spec["query"]
+        if query.count("?") != len(ordered):
+            raise CapabilityExecutorError(
+                f"capability '{capability.id}': query has {query.count('?')} "
+                f"placeholders but {len(ordered)} parameters"
+            )
+        return query, ordered

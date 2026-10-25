@@ -13,11 +13,12 @@ so the error is raised instead.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import AsyncIterator
 
 from strands import Agent
 
-from agent_api.domain.conversation import ASSISTANT, Conversation, Turn
+from agent_api.domain.conversation import ASSISTANT, Conversation, ToolResult, Turn
 from agent_api.platform.retry import RetryPolicy, backoff_delay, call_with_retry
 from agent_api.ports.model_gateway import ModelGatewayError, StreamChunk
 
@@ -56,10 +57,46 @@ class StrandsGatewayBase:
     # -- shared mechanics ---------------------------------------------------
 
     def _build_agent(self, conversation: Conversation) -> Agent:
-        messages = [
-            {"role": turn.role, "content": [{"text": turn.content}]}
-            for turn in conversation.turns
-        ]
+        # Seed framework-natively: an assistant turn's tool calls become
+        # toolUse blocks, and their results become toolResult blocks in a
+        # following user-role message — the shape Strands itself produces
+        # mid-turn. Without this, the next turn could only see what the
+        # previous answer summarized, not what the tools actually returned.
+        # Synthetic toolUseIds pair each call with its result; they are
+        # history reconstruction, never re-executed.
+        messages = []
+        for i, turn in enumerate(conversation.turns):
+            if turn.role != ASSISTANT or not turn.tool_results:
+                messages.append(
+                    {"role": turn.role, "content": [{"text": turn.content}]}
+                )
+                continue
+            blocks: list[dict] = [{"text": turn.content}]
+            for j, result in enumerate(turn.tool_results):
+                blocks.append(
+                    {
+                        "toolUse": {
+                            "toolUseId": f"seed-{i}-{j}",
+                            "name": result.tool,
+                            "input": {},
+                        }
+                    }
+                )
+            messages.append({"role": turn.role, "content": blocks})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "toolResult": {
+                                "toolUseId": f"seed-{i}-{j}",
+                                "content": {"text": result.result},
+                            }
+                        }
+                        for j, result in enumerate(turn.tool_results)
+                    ],
+                }
+            )
         return Agent(
             model=self._build_model(),
             messages=messages,
@@ -79,22 +116,60 @@ class StrandsGatewayBase:
         )
 
     @staticmethod
-    def _tools_used(agent: Agent) -> list[str]:
+    def _tools_used(agent: Agent, skip: int = 0) -> list[str]:
+        # skip = seeded messages: seeded toolUse blocks belong to earlier
+        # turns and must not be attributed to this turn.
         names: list[str] = []
-        for message in agent.messages:
+        for message in agent.messages[skip:]:
             for block in message.get("content", []):
                 use = block.get("toolUse")
                 if use and use.get("name") not in names:
                     names.append(use["name"])
         return names
 
+    @staticmethod
+    def _result_text(content) -> str:
+        if isinstance(content, dict):
+            if "text" in content:
+                return str(content["text"])
+            if "json" in content:
+                return json.dumps(content["json"], default=str)
+            return json.dumps(content, default=str)
+        if isinstance(content, list):
+            return "".join(
+                block.get("text", "") if isinstance(block, dict) else str(block)
+                for block in content
+            )
+        return str(content)
+
+    @classmethod
+    def _tool_results(cls, agent: Agent, skip: int = 0) -> list[ToolResult]:
+        # toolUse blocks and their toolResult blocks appear in order, so
+        # pairing them positionally reconstructs (tool, result) pairs.
+        names: list[str] = []
+        results: list[str] = []
+        for message in agent.messages[skip:]:
+            for block in message.get("content", []):
+                use = block.get("toolUse")
+                if use and use.get("name"):
+                    names.append(use["name"])
+                outcome = block.get("toolResult")
+                if outcome is not None:
+                    results.append(cls._result_text(outcome.get("content", "")))
+        return [
+            ToolResult(tool=name, result=text)
+            for name, text in zip(names, results)
+        ]
+
     def _generate_once(self, conversation: Conversation) -> Turn:
         agent = self._build_agent(conversation)
+        seeded = len(agent.messages)
         result = agent()  # no prompt: continue from the seeded history
         return Turn(
             role=ASSISTANT,
             content=self._reply_text(result),
-            tool_uses=tuple(self._tools_used(agent)),
+            tool_uses=tuple(self._tools_used(agent, seeded)),
+            tool_results=tuple(self._tool_results(agent, seeded)),
         )
 
     def generate(self, conversation: Conversation) -> Turn:
@@ -113,6 +188,7 @@ class StrandsGatewayBase:
         self, conversation: Conversation
     ) -> AsyncIterator[StreamChunk]:
         agent = self._build_agent(conversation)
+        seeded = len(agent.messages)
         async for event in agent.stream_async():  # no prompt: seeded history
             # Text deltas arrive as {"data": "<text>"}; other events carry
             # dicts (message/result) or lifecycle markers — ignore those.
@@ -123,6 +199,14 @@ class StrandsGatewayBase:
                 name = (event["current_tool_use"] or {}).get("name", "")
                 if name:
                     yield StreamChunk(kind="tool", payload=name)
+        # Trailing result chunks: the service persists them so the next
+        # turn can see this turn's tool outputs. The UI ignores unknown
+        # chunk kinds, so these are harmless to the stream display.
+        for result in self._tool_results(agent, seeded):
+            yield StreamChunk(
+                kind="tool_result",
+                payload=json.dumps({"tool": result.tool, "result": result.result}),
+            )
 
     async def stream(
         self, conversation: Conversation

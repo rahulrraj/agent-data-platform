@@ -10,6 +10,10 @@ from typing import Protocol
 from agent_api.domain.conversation import Conversation
 
 
+class ConversationRepositoryError(Exception):
+    """A conversation store operation failed (load/save/ping)."""
+
+
 class ConversationRepository(Protocol):
     """Load/save the application's own conversation records."""
 

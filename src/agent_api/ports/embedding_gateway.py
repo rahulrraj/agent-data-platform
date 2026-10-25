@@ -9,6 +9,10 @@ from __future__ import annotations
 from typing import Protocol
 
 
+class EmbeddingGatewayError(Exception):
+    """An embedding operation failed (embed/ping)."""
+
+
 class EmbeddingGateway(Protocol):
     """Outbound port for text embeddings."""
 

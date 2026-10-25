@@ -18,13 +18,14 @@ Retry rule for streams: only failures before the first chunk are retried.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import AsyncIterator
 
 from langchain.agents import create_agent
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
-from agent_api.domain.conversation import ASSISTANT, USER, Conversation, Turn
+from agent_api.domain.conversation import ASSISTANT, USER, Conversation, ToolResult, Turn
 from agent_api.platform.retry import RetryPolicy, backoff_delay, call_with_retry
 from agent_api.ports.model_gateway import ModelGatewayError, StreamChunk
 
@@ -91,16 +92,66 @@ class LangGraphGatewayBase:
 
     @staticmethod
     def _messages(conversation: Conversation) -> list:
+        # Seed framework-natively: an assistant turn's tool calls become
+        # AIMessage tool_calls, each followed by its ToolMessage result —
+        # the shape LangGraph itself produces mid-turn. Synthetic ids pair
+        # each call with its result; they are history reconstruction,
+        # never re-executed.
         messages = []
-        for turn in conversation.turns:
+        for i, turn in enumerate(conversation.turns):
             if turn.role == USER:
                 messages.append(HumanMessage(content=turn.content))
             elif turn.role == ASSISTANT:
-                messages.append(AIMessage(content=turn.content))
+                if turn.tool_results:
+                    messages.append(
+                        AIMessage(
+                            content=turn.content,
+                            tool_calls=[
+                                {
+                                    "id": f"seed-{i}-{j}",
+                                    "name": result.tool,
+                                    "args": {},
+                                }
+                                for j, result in enumerate(turn.tool_results)
+                            ],
+                        )
+                    )
+                    for j, result in enumerate(turn.tool_results):
+                        messages.append(
+                            ToolMessage(
+                                content=result.result,
+                                tool_call_id=f"seed-{i}-{j}",
+                            )
+                        )
+                else:
+                    messages.append(AIMessage(content=turn.content))
         return messages
 
     @staticmethod
-    def _final_turn(messages: list) -> Turn:
+    def _tool_results(messages: list) -> list[ToolResult]:
+        # Map tool_call_id -> tool name from the AIMessage tool_calls, then
+        # read each ToolMessage's content verbatim.
+        names: dict[str, str] = {}
+        for message in messages:
+            for call in getattr(message, "tool_calls", None) or []:
+                if call.get("id") and call.get("name"):
+                    names[call["id"]] = call["name"]
+        results: list[ToolResult] = []
+        for message in messages:
+            if isinstance(message, ToolMessage):
+                content = message.content
+                if not isinstance(content, str):
+                    content = json.dumps(content, default=str)
+                results.append(
+                    ToolResult(
+                        tool=names.get(message.tool_call_id, getattr(message, "name", "")),
+                        result=content,
+                    )
+                )
+        return results
+
+    @classmethod
+    def _final_turn(cls, messages: list) -> Turn:
         tool_uses: list[str] = []
         for message in messages:
             for call in getattr(message, "tool_calls", None) or []:
@@ -112,7 +163,12 @@ class LangGraphGatewayBase:
             if isinstance(message, AIMessage) and message.content:
                 reply = str(message.content)
                 break
-        return Turn(role=ASSISTANT, content=reply.strip(), tool_uses=tuple(tool_uses))
+        return Turn(
+            role=ASSISTANT,
+            content=reply.strip(),
+            tool_uses=tuple(tool_uses),
+            tool_results=tuple(cls._tool_results(messages)),
+        )
 
     def generate(self, conversation: Conversation) -> Turn:
         try:
@@ -128,8 +184,11 @@ class LangGraphGatewayBase:
 
     def _generate_once(self, conversation: Conversation) -> Turn:
         agent = self._build_agent()
-        result = agent.invoke({"messages": self._messages(conversation)})
-        return self._final_turn(result["messages"])
+        seeded = self._messages(conversation)
+        result = agent.invoke({"messages": seeded})
+        # Slice off the seeded prefix: seeded tool_calls/ToolMessages
+        # belong to earlier turns, not this one.
+        return self._final_turn(result["messages"][len(seeded):])
 
     async def stream(
         self, conversation: Conversation
@@ -168,3 +227,13 @@ class LangGraphGatewayBase:
                     yield StreamChunk(kind="text", payload=str(text))
             elif kind == "on_tool_start":
                 yield StreamChunk(kind="tool", payload=event["name"])
+            elif kind == "on_tool_end":
+                # Trailing result chunks for the service to persist (see
+                # StrandsGatewayBase._stream_once); the UI ignores them.
+                output = event["data"].get("output", "")
+                if not isinstance(output, str):
+                    output = json.dumps(output, default=str)
+                yield StreamChunk(
+                    kind="tool_result",
+                    payload=json.dumps({"tool": event["name"], "result": output}),
+                )

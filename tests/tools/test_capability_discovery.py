@@ -158,6 +158,8 @@ def test_unrelated_prompt_reports_no_match(discover):
 
 
 def test_only_one_api_returned(discover):
-    # "only the api which is needed" — never a grab-bag
+    # "only the api which is needed" — never a grab-bag. The score field
+    # is part of the single answer (confidence signal), not a second API.
     match = json.loads(discover("What are the returns for all accounts of customer C-123?"))
-    assert set(match.keys()) == {"id", "description", "parameters"}
+    assert set(match.keys()) == {"id", "description", "parameters", "score"}
+    assert match["id"] == "returns_by_customer"

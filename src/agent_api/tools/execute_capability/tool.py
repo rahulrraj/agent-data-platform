@@ -4,6 +4,16 @@ Takes a capability id (from discover_capability) and a parameters object.
 Validates the parameters against the registry schema, then dispatches to the
 executor for the capability's kind (snowflake, sqlserver, http).
 
+Provenance is enforced, not just documented: the id must have been
+returned by discover_capability (via the shared set on ToolDeps), or
+the call is refused with an instruction to discover first. Hard reject,
+not advisory: a model that guesses an id gets a correctable error, and
+there is no false-rejection case for a model that follows the documented
+discover-then-execute flow. Parameter *values* are deliberately NOT
+checked against prior tool results: the first hop's values legitimately
+come from the user's own message (e.g. "customer C-123"), so that check
+would false-reject the primary flow.
+
 Factory plugin: create_tool(deps) needs deps.capability_registry and
 deps.capability_executors.
 """
@@ -50,6 +60,7 @@ def _validate(capability, params: dict) -> str | None:
 def create_tool(deps):
     registry = deps.capability_registry
     executors = deps.capability_executors or {}
+    discovered = getattr(deps, "discovered_capability_ids", None)
     if registry is None:
         raise RuntimeError("execute_capability needs capability_registry")
 
@@ -64,6 +75,12 @@ def create_tool(deps):
         capability = registry.get(capability_id)
         if capability is None:
             return f"Unknown capability: {capability_id}. Use discover_capability first."
+        if discovered is not None and capability_id not in discovered:
+            return (
+                f"Capability '{capability_id}' was not returned by "
+                "discover_capability. Use discover_capability first to find "
+                "the right capability, then execute the id it returns."
+            )
         error = _validate(capability, parameters or {})
         if error:
             return f"Invalid parameters: {error}"

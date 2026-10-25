@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import json
 
-from agent_api.domain.conversation import Conversation, Turn
+from agent_api.domain.conversation import Conversation, ToolResult, Turn
+from agent_api.ports.conversation_repository import ConversationRepositoryError
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
@@ -39,10 +40,15 @@ class PostgresConversationRepository:
         if not dsn:
             raise ValueError("POSTGRES_DSN is not set")
         self._dsn = dsn
-        psycopg = _psycopg()
-        with psycopg.connect(dsn) as conn:
-            conn.execute(_SCHEMA)
-            conn.commit()
+        try:
+            psycopg = _psycopg()
+            with psycopg.connect(dsn) as conn:
+                conn.execute(_SCHEMA)
+                conn.commit()
+        except ConversationRepositoryError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise ConversationRepositoryError(f"postgres store init failed: {exc}") from exc
 
     def _connect(self):
         return _psycopg().connect(self._dsn)
@@ -51,7 +57,14 @@ class PostgresConversationRepository:
     def _dump(conversation: Conversation) -> str:
         return json.dumps(
             [
-                {"role": t.role, "content": t.content, "tool_uses": list(t.tool_uses)}
+                {
+                    "role": t.role,
+                    "content": t.content,
+                    "tool_uses": list(t.tool_uses),
+                    "tool_results": [
+                        {"tool": r.tool, "result": r.result} for r in t.tool_results
+                    ],
+                }
                 for t in conversation.turns
             ]
         )
@@ -66,29 +79,57 @@ class PostgresConversationRepository:
                     role=item["role"],
                     content=item["content"],
                     tool_uses=tuple(item.get("tool_uses", [])),
+                    tool_results=tuple(
+                        ToolResult(tool=r["tool"], result=r["result"])
+                        for r in item.get("tool_results", [])
+                    ),
                 )
                 for item in items
             ],
         )
 
     def load(self, conversation_id: str) -> Conversation:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT turns_json FROM conversations WHERE id = %s",
-                (conversation_id,),
-            ).fetchone()
-        return self._load(conversation_id, row[0] if row else None)
+        try:
+            with self._connect() as conn:
+                row = conn.execute(
+                    "SELECT turns_json FROM conversations WHERE id = %s",
+                    (conversation_id,),
+                ).fetchone()
+            return self._load(conversation_id, row[0] if row else None)
+        except ConversationRepositoryError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise ConversationRepositoryError(f"postgres store load failed: {exc}") from exc
 
     def save(self, conversation: Conversation) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO conversations (id, turns_json) VALUES (%s, %s::jsonb) "
-                "ON CONFLICT (id) DO UPDATE SET "
-                "turns_json = EXCLUDED.turns_json, updated_at = now()",
-                (conversation.id, self._dump(conversation)),
-            )
-            conn.commit()
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    "INSERT INTO conversations (id, turns_json) VALUES (%s, %s::jsonb) "
+                    "ON CONFLICT (id) DO UPDATE SET "
+                    "turns_json = EXCLUDED.turns_json, updated_at = now()",
+                    (conversation.id, self._dump(conversation)),
+                )
+                conn.commit()
+        except ConversationRepositoryError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise ConversationRepositoryError(f"postgres store save failed: {exc}") from exc
 
     def ping(self) -> None:
-        with self._connect() as conn:
-            conn.execute("SELECT 1").fetchone()
+        """Writability probe: write a probe row, then delete it again."""
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    "INSERT INTO conversations (id, turns_json) VALUES (%s, %s::jsonb) "
+                    "ON CONFLICT (id) DO UPDATE SET turns_json = EXCLUDED.turns_json",
+                    ("__readiness_probe__", "[]"),
+                )
+                conn.execute(
+                    "DELETE FROM conversations WHERE id = %s", ("__readiness_probe__",)
+                )
+                conn.commit()
+        except ConversationRepositoryError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise ConversationRepositoryError(f"postgres store ping failed: {exc}") from exc

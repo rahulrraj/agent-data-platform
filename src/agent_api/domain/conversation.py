@@ -12,12 +12,25 @@ ASSISTANT = "assistant"
 
 
 @dataclass(frozen=True)
+class ToolResult:
+    """One tool call's outcome inside a turn: which tool, what it returned.
+
+    Stored verbatim (execute_capability results) so the next turn can see
+    prior tool outputs instead of only the assistant's summary of them.
+    """
+
+    tool: str
+    result: str
+
+
+@dataclass(frozen=True)
 class Turn:
     """One turn in a conversation: who said it, what was said, which tools ran."""
 
     role: str
     content: str
     tool_uses: tuple[str, ...] = ()
+    tool_results: tuple[ToolResult, ...] = ()
 
 
 @dataclass
@@ -30,5 +43,17 @@ class Conversation:
     def add_user(self, text: str) -> None:
         self.turns.append(Turn(role=USER, content=text))
 
-    def add_assistant(self, text: str, tool_uses: tuple[str, ...] | list[str] = ()) -> None:
-        self.turns.append(Turn(role=ASSISTANT, content=text, tool_uses=tuple(tool_uses)))
+    def add_assistant(
+        self,
+        text: str,
+        tool_uses: tuple[str, ...] | list[str] = (),
+        tool_results: tuple[ToolResult, ...] | list[ToolResult] = (),
+    ) -> None:
+        self.turns.append(
+            Turn(
+                role=ASSISTANT,
+                content=text,
+                tool_uses=tuple(tool_uses),
+                tool_results=tuple(tool_results),
+            )
+        )

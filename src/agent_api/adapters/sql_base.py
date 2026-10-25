@@ -3,12 +3,21 @@
 Subclasses provide the DBAPI connection; everything else — read-only
 enforcement, parameterized execution, row caps, retries — lives here once.
 
+Read-only enforcement is two layers: (1) this module's first-keyword
+guard refuses any `mode: read` statement that does not start with
+SELECT/WITH — a backstop, not a parser, and it must not be mistaken for
+one; (2) the real enforcement is a read-only database role with no write
+grants on the connection used (see doc/data-capabilities.md). A registry
+entry is reviewed code, but defense in depth means a bad entry alone
+cannot turn a read capability into a write.
 Parameter styles differ per driver (documented per adapter):
 - snowflake: %(name)s placeholders (pyformat)
 - sqlserver: ? placeholders, positional in registry parameter order
 """
 
 from __future__ import annotations
+
+import re
 
 from agent_api.domain.capability import Capability
 from agent_api.platform.retry import RetryPolicy, call_with_retry
@@ -56,6 +65,29 @@ class SqlExecutorBase:
                 "(DATA_CONNECTIONS)"
             ) from None
 
+    @staticmethod
+    def _first_keyword(query: str) -> str:
+        """First SQL keyword, skipping whitespace and comments.
+
+        Backstop only: it looks at the start of the statement, it does
+        not parse SQL. Multi-statement strings and exotic syntax are
+        still the read-only DB role's problem, not this guard's.
+        """
+        text = query.strip()
+        while True:
+            if text.startswith("/*"):
+                end = text.find("*/")
+                if end == -1:
+                    return ""
+                text = text[end + 2 :].strip()
+            elif text.startswith("--"):
+                text = text.split("\n", 1)[-1].strip() if "\n" in text else ""
+            else:
+                break
+        text = text.lstrip("(").strip()
+        match = re.match(r"[A-Za-z]+", text)
+        return match.group(0).upper() if match else ""
+
     def execute(self, capability: Capability, params: dict) -> dict:
         if capability.mode != "read":
             raise CapabilityExecutorError(
@@ -65,6 +97,11 @@ class SqlExecutorBase:
         if not query:
             raise CapabilityExecutorError(
                 f"capability '{capability.id}' has no query in its registry entry"
+            )
+        if self._first_keyword(query) not in ("SELECT", "WITH"):
+            raise CapabilityExecutorError(
+                f"refusing non-read statement for capability '{capability.id}' "
+                f"(mode=read requires SELECT/WITH)"
             )
         try:
             return call_with_retry(

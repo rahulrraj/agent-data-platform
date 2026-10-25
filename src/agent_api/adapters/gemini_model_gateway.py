@@ -39,20 +39,28 @@ class GeminiModelGateway(StrandsGatewayBase):
         )
 
     def _is_transient(self, exc: Exception) -> bool:
+        # Match what the SDKs actually raise (verified against the
+        # installed packages): Strands converts 429/503 into
+        # ModelThrottledException, and the google-genai client raises
+        # APIError subclasses carrying a numeric `code`. The old check
+        # against google.api_core exceptions never matched either — and
+        # google.api_core is not even installed — so 429/503 were never
+        # retried.
         try:
-            from google.api_core import exceptions as google_exc
+            from strands.types.exceptions import ModelThrottledException
+
+            if isinstance(exc, ModelThrottledException):
+                return True
+        except ImportError:
+            pass
+        try:
+            from google.genai import errors as genai_errors
         except ImportError:
             return False
-        return isinstance(
-            exc,
-            (
-                google_exc.ServiceUnavailable,
-                google_exc.DeadlineExceeded,
-                google_exc.ResourceExhausted,
-                google_exc.Internal,
-                google_exc.BadGateway,
-            ),
-        )
+        if isinstance(exc, genai_errors.APIError):
+            code = getattr(exc, "code", None)
+            return code == 429 or (isinstance(code, int) and 500 <= code < 600)
+        return False
 
     def ping(self) -> None:
         """Cheap readiness check: key configured.

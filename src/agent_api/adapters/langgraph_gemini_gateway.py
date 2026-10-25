@@ -41,20 +41,38 @@ class LangGraphGeminiGateway(LangGraphGatewayBase):
         )
 
     def _is_transient(self, exc: Exception) -> bool:
+        # Match what langchain_google_genai actually raises (verified
+        # against the installed package): 429 -> GoogleRateLimitError, 5xx
+        # -> GoogleAPIError (a genai ServerError). langchain_core's
+        # ModelRateLimitError covers the same 429 case through the base
+        # class, and a raw genai APIError is classified by its code.
+        # The old google.api_core check never matched either type — and
+        # google.api_core is not installed — so 429/503 were never retried.
         try:
-            from google.api_core import exceptions as google_exc
+            from langchain_google_genai.chat_models import (
+                GoogleAPIError,
+                GoogleRateLimitError,
+            )
+
+            if isinstance(exc, (GoogleRateLimitError, GoogleAPIError)):
+                return True
+        except ImportError:
+            pass
+        try:
+            from langchain_core.exceptions import ModelRateLimitError
+
+            if isinstance(exc, ModelRateLimitError):
+                return True
+        except ImportError:
+            pass
+        try:
+            from google.genai import errors as genai_errors
         except ImportError:
             return False
-        return isinstance(
-            exc,
-            (
-                google_exc.ServiceUnavailable,
-                google_exc.DeadlineExceeded,
-                google_exc.ResourceExhausted,
-                google_exc.Internal,
-                google_exc.BadGateway,
-            ),
-        )
+        if isinstance(exc, genai_errors.APIError):
+            code = getattr(exc, "code", None)
+            return code == 429 or (isinstance(code, int) and 500 <= code < 600)
+        return False
 
     def ping(self) -> None:
         """Cheap readiness check: key configured.

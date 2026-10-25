@@ -10,7 +10,7 @@ import array
 import sqlite3
 from datetime import datetime, timezone
 
-from agent_api.ports.embedding_cache import CachedEmbedding
+from agent_api.ports.embedding_cache import CachedEmbedding, EmbeddingCacheError
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS capability_embeddings (
@@ -39,34 +39,52 @@ class SqliteEmbeddingCache:
 
     def __init__(self, path: str) -> None:
         self._path = path
-        with sqlite3.connect(path) as conn:
-            conn.execute(_SCHEMA)
+        try:
+            with sqlite3.connect(path) as conn:
+                conn.execute(_SCHEMA)
+        except Exception as exc:  # noqa: BLE001
+            raise EmbeddingCacheError(f"embedding cache init failed: {exc}") from exc
 
     def load(self, model: str) -> dict[str, CachedEmbedding]:
-        with sqlite3.connect(self._path) as conn:
-            rows = conn.execute(
-                "SELECT capability_id, description_hash, vector"
-                " FROM capability_embeddings WHERE model = ?",
-                (model,),
-            ).fetchall()
-        return {
-            capability_id: CachedEmbedding(capability_id, description_hash, model, _decode(vector))
-            for capability_id, description_hash, vector in rows
-        }
+        try:
+            with sqlite3.connect(self._path) as conn:
+                rows = conn.execute(
+                    "SELECT capability_id, description_hash, vector"
+                    " FROM capability_embeddings WHERE model = ?",
+                    (model,),
+                ).fetchall()
+            return {
+                capability_id: CachedEmbedding(capability_id, description_hash, model, _decode(vector))
+                for capability_id, description_hash, vector in rows
+            }
+        except EmbeddingCacheError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise EmbeddingCacheError(f"embedding cache load failed: {exc}") from exc
 
     def save(self, embeddings: list[CachedEmbedding]) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self._path) as conn:
-            conn.executemany(
-                "INSERT OR REPLACE INTO capability_embeddings"
-                " (capability_id, model, description_hash, vector, updated_at)"
-                " VALUES (?, ?, ?, ?, ?)",
-                [
-                    (e.capability_id, e.model, e.description_hash, _encode(e.vector), now)
-                    for e in embeddings
-                ],
-            )
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            with sqlite3.connect(self._path) as conn:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO capability_embeddings"
+                    " (capability_id, model, description_hash, vector, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    [
+                        (e.capability_id, e.model, e.description_hash, _encode(e.vector), now)
+                        for e in embeddings
+                    ],
+                )
+        except EmbeddingCacheError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise EmbeddingCacheError(f"embedding cache save failed: {exc}") from exc
 
     def ping(self) -> None:
-        with sqlite3.connect(self._path) as conn:
-            conn.execute("SELECT 1 FROM capability_embeddings LIMIT 1").fetchone()
+        try:
+            with sqlite3.connect(self._path) as conn:
+                conn.execute("SELECT 1 FROM capability_embeddings LIMIT 1").fetchone()
+        except EmbeddingCacheError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise EmbeddingCacheError(f"embedding cache ping failed: {exc}") from exc

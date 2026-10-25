@@ -2,7 +2,8 @@
 
 Translates AWS Lambda invocation events into the existing use cases and
 returns the standard Lambda proxy response dict. Knows nothing about model
-providers — it only sees the FastAPI app built by main.build_app().
+providers — it only sees the FastAPI app built by
+composition.build_app().
 
 Placement: controllers/ holds inbound adapters, and a Lambda handler is
 one: like controllers/http.py it translates a transport event into the
@@ -51,7 +52,7 @@ from typing import Any
 
 from mangum import Mangum
 
-from agent_api.main import build_app
+from agent_api.composition import build_app
 
 _mangum: Mangum | None = None
 

@@ -28,16 +28,30 @@ import pkgutil
 from dataclasses import dataclass, field
 from typing import Any
 
+from agent_api.ports.capability_executor import CapabilityExecutor
+from agent_api.ports.capability_repository import CapabilityRepository
+from agent_api.ports.embedding_cache import EmbeddingCache
+from agent_api.ports.embedding_gateway import EmbeddingGateway
+
 
 @dataclass
 class ToolDeps:
     """Dependencies available to factory plugins. Fields are optional so a
-    minimal setup (pure tools only) still works."""
+    minimal setup (pure tools only) still works.
 
-    capability_registry: Any | None = None
-    embedding_gateway: Any | None = None
-    embedding_cache: Any | None = None
-    capability_executors: dict[str, Any] = field(default_factory=dict)
+    `discovered_capability_ids` is the provenance set shared by the
+    discover/execute tools: discover_capability records every id it
+    returns, execute_capability refuses ids outside the set. Scope is
+    the process (the tool layer has no turn-boundary hook to reset it
+    per turn); a restart clears it. It still defeats invented ids and
+    skipped discover hops, which is the failure it guards.
+    """
+
+    capability_registry: CapabilityRepository | None = None
+    embedding_gateway: EmbeddingGateway | None = None
+    embedding_cache: EmbeddingCache | None = None
+    capability_executors: dict[str, CapabilityExecutor] = field(default_factory=dict)
+    discovered_capability_ids: set[str] = field(default_factory=set)
 
 
 def _is_strands_tool(obj: Any) -> bool:

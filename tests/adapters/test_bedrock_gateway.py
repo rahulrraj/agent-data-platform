@@ -37,7 +37,10 @@ class _FakeResult:
 
 class _FakeAgent:
     def __init__(self, fail_with=None):
-        self.messages = [{"content": [{"toolUse": {"name": "calculate"}}]}]
+        # Messages start empty (seeded history) and the turn appends its
+        # own toolUse message on __call__, like a real Strands agent:
+        # _generate_once attributes only post-seed messages to the turn.
+        self.messages = []
         self._fail_with = fail_with
         self.calls = 0
 
@@ -45,6 +48,7 @@ class _FakeAgent:
         self.calls += 1
         if self._fail_with is not None:
             raise self._fail_with
+        self.messages.append({"content": [{"toolUse": {"name": "calculate"}}]})
         return _FakeResult()
 
     async def stream_async(self):

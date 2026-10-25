@@ -11,6 +11,7 @@ from pathlib import Path
 import yaml
 
 from agent_api.domain.capability import Capability, ParameterSpec
+from agent_api.ports.capability_repository import CapabilityRepositoryError
 
 
 _META_KEYS = {"id", "description", "kind", "connection", "mode", "parameters"}
@@ -21,7 +22,12 @@ class YamlCapabilityRepository:
 
     def __init__(self, path: str) -> None:
         self._path = path
-        self._capabilities = self._load(path)
+        try:
+            self._capabilities = self._load(path)
+        except CapabilityRepositoryError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise CapabilityRepositoryError(f"registry load failed: {exc}") from exc
 
     @staticmethod
     def _load(path: str) -> dict[str, Capability]:
@@ -65,4 +71,9 @@ class YamlCapabilityRepository:
         return self._capabilities.get(capability_id)
 
     def ping(self) -> None:
-        Path(self._path).stat()  # raises if unreadable
+        try:
+            Path(self._path).stat()  # raises if unreadable
+        except CapabilityRepositoryError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise CapabilityRepositoryError(f"registry ping failed: {exc}") from exc

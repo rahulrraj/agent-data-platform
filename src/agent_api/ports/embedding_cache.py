@@ -25,6 +25,10 @@ class CachedEmbedding:
     vector: tuple[float, ...]
 
 
+class EmbeddingCacheError(Exception):
+    """An embedding-cache operation failed (load/save/ping)."""
+
+
 class EmbeddingCache(Protocol):
     """Outbound port for persisted description vectors."""
 

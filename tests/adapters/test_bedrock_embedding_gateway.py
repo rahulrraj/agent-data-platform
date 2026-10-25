@@ -7,6 +7,7 @@ import json
 import pytest
 
 from agent_api.adapters.bedrock_embedding_gateway import BedrockEmbeddingGateway
+from agent_api.ports.embedding_gateway import EmbeddingGatewayError
 
 
 class _FakeBody:
@@ -67,7 +68,7 @@ def test_ping_requires_credentials(monkeypatch):
 
     gateway = BedrockEmbeddingGateway("us-east-1")
     monkeypatch.setattr("boto3.Session", lambda **kw: FakeSession(None))
-    with pytest.raises(RuntimeError, match="no AWS credentials"):
+    with pytest.raises(EmbeddingGatewayError, match="no AWS credentials"):
         gateway.ping()
     monkeypatch.setattr("boto3.Session", lambda **kw: FakeSession(object()))
     gateway.ping()  # no raise

@@ -82,11 +82,18 @@ class FakeExecutor:
 
 @pytest.fixture()
 def deps():
-    return ToolDeps(
+    # Provenance: execute_capability only accepts ids discover_capability
+    # returned, so the fixture discovers both capabilities first — the
+    # documented discover-then-execute flow.
+    d = ToolDeps(
         capability_registry=FakeRegistry(_caps()),
         embedding_gateway=FakeEmbeddings(),
         capability_executors={"snowflake": FakeExecutor(), "http": FakeExecutor()},
     )
+    discover = create_discover(d)
+    discover("customer tier lookup")
+    discover("where is my order")
+    return d
 
 
 def test_discover_finds_matching_capability(deps):

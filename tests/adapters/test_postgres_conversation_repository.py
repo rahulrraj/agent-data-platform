@@ -17,6 +17,7 @@ from agent_api.adapters.postgres_conversation_repository import (
     PostgresConversationRepository,
 )
 from agent_api.domain.conversation import Conversation, Turn
+from agent_api.ports.conversation_repository import ConversationRepositoryError
 
 
 class FakeCursor:
@@ -135,10 +136,13 @@ def test_missing_driver_error(monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    with pytest.raises(RuntimeError, match=r"pip install"):
+    with pytest.raises(ConversationRepositoryError, match=r"pip install"):
         PostgresConversationRepository("postgres://test")
 
 
 def test_ping(fake_pg):
+    # Ping proves writability: a probe row is written, then deleted.
     PostgresConversationRepository("postgres://test").ping()
-    assert any("SELECT 1" in sql for sql, _ in fake_pg.conn.statements)
+    statements = [sql for sql, _ in fake_pg.conn.statements]
+    assert any("INSERT INTO conversations" in sql for sql in statements)
+    assert any("DELETE FROM conversations" in sql for sql in statements)

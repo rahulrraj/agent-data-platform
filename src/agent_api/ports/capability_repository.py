@@ -11,6 +11,10 @@ from typing import Protocol
 from agent_api.domain.capability import Capability
 
 
+class CapabilityRepositoryError(Exception):
+    """A capability registry operation failed (load/ping)."""
+
+
 class CapabilityRepository(Protocol):
     """Outbound port for reading the capability registry."""
 

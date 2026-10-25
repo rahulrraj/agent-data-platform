@@ -3,6 +3,7 @@
 import pytest
 
 from agent_api.adapters.yaml_capability_repository import YamlCapabilityRepository
+from agent_api.ports.capability_repository import CapabilityRepositoryError
 
 SAMPLE = """
 capabilities:
@@ -59,7 +60,7 @@ def test_get_unknown_returns_none(repo):
 
 
 def test_missing_file_raises_clear_error(tmp_path):
-    with pytest.raises(FileNotFoundError, match="capability registry not found"):
+    with pytest.raises(CapabilityRepositoryError, match="capability registry not found"):
         YamlCapabilityRepository(str(tmp_path / "missing.yaml"))
 
 
@@ -80,5 +81,5 @@ capabilities:
     parameters: {}
 """
     )
-    with pytest.raises(ValueError, match="duplicate capability id"):
+    with pytest.raises(CapabilityRepositoryError, match="duplicate capability id"):
         YamlCapabilityRepository(str(path))

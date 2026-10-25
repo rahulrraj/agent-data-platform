@@ -35,9 +35,12 @@ controllers/ -> services/ -> ports/        (adapters implement ports)
   `InMemoryConversationRepository`, `SqliteConversationRepository`.
   Adapters translate provider failures into port errors.
 - `config/` — `settings.py` loads/parses/validates env vars. Nothing else
-  reads the environment.
-- `main.py` — composition root: the ONLY place that reads Settings and picks
-  adapters. No business logic.
+  reads the environment, except the composition root's proxy strip
+  (ADR 0005) — the one sanctioned exception.
+- `composition.py` — composition root: the ONLY place that reads Settings
+  and picks adapters. No business logic. `main.py` is a thin CLI
+  entrypoint over `composition.build_app()`; `controllers/lambda_handler.py`
+  imports `build_app` from `composition`, never from `main`.
 - `src/ui/` — React chat frontend (Vite). Talks to the API over HTTP/SSE only;
   never imports backend code. See `src/ui/README.md`.
 - `registry/` — data capability registry YAML (see doc/data-capabilities.md).
@@ -97,7 +100,7 @@ SKILL.md directly when the task matches:
 - Conversation store: `CONVERSATION_STORE=memory` (default) or `sqlite`
   (`SQLITE_PATH`, durable across restarts, single host).
 - AWS Lambda: `controllers/lambda_handler.py` is a Mangum adapter over the
-  same FastAPI app (built via `main.build_app()`); image in
+  same FastAPI app (built via `composition.build_app()`); image in
   `Dockerfile.lambda`. On Lambda, `CONVERSATION_STORE` must be `postgres`
   and `EMBEDDING_CACHE_PATH` must point at `/tmp`. `/api/chat` is
   buffered SSE there (Mangum buffers the whole body) and must be served
@@ -106,8 +109,10 @@ SKILL.md directly when the task matches:
 
 ## Sandbox quirks (this dev VM only)
 
-- `adapters/ollama_model_gateway.py` strips proxy env vars at import time; the
-  sandbox's proxy values break the `ollama` package's import-time HTTP client.
+- Proxy env vars: the sandbox's proxy values break the `ollama` package's
+  import-time HTTP client, so `composition.build_gateway()` strips proxy
+  vars before lazily importing gateway classes (ADR 0005); adapters never
+  touch `os.environ`. Per-call Ollama clients pass `trust_env=False`.
   The same broken values break any `httpx.Client` with `trust_env=True` —
   use `trust_env=False` for localhost calls. Harmless elsewhere.
 - The sandbox egress proxy blocks Ollama's model registry, so `ollama pull`

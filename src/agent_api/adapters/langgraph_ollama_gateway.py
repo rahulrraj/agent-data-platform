@@ -2,17 +2,14 @@
 
 Same stateless-per-call shape as the Strands side; only the agent runtime
 differs. Chosen via AGENT_FRAMEWORK=langgraph (AGENT_MODEL_PROVIDER=ollama).
+
+Proxy handling lives in the composition root (see ADR 0005): this module
+no longer touches os.environ at import time. The per-call Ollama client
+itself is built with trust_env=False, so model calls never consult proxy
+env vars either.
 """
 
 from __future__ import annotations
-
-import os
-
-for _key in [k for k in os.environ if "proxy" in k.lower()]:
-    # Sandbox quirk: langchain_ollama imports the `ollama` package, which
-    # creates an HTTP client at import time — the sandbox's proxy values
-    # break it. Localhost needs no proxy. Must run before that import.
-    del os.environ[_key]
 
 import httpx
 
@@ -51,6 +48,9 @@ class LangGraphOllamaGateway(LangGraphGatewayBase):
             base_url=self._host,
             temperature=0,
             timeout=self._timeout,
+            # trust_env=False: proxy env vars must not affect localhost
+            # model calls (see module docstring / ADR 0005).
+            client_kwargs={"trust_env": False},
         )
 
     def _is_transient(self, exc: Exception) -> bool:
@@ -68,13 +68,24 @@ class LangGraphOllamaGateway(LangGraphGatewayBase):
         return status == 429 or (isinstance(status, int) and 500 <= status < 600)
 
     def ping(self) -> None:
-        """Cheap reachability check: the server's tag list, no inference."""
+        """Cheap reachability check: the server's tag list, no inference —
+        and the configured model must actually be present in that list.
+        A reachable server without the model would fail every turn.
+        """
         try:
             # trust_env=False: the sandbox's no_proxy values break httpx parsing.
             with httpx.Client(trust_env=False, timeout=5) as client:
                 response = client.get(f"{self._host}/api/tags")
             if response.status_code != 200:
                 raise ModelGatewayError(f"ollama not reachable: HTTP {response.status_code}")
+            names = [m.get("name", "") for m in response.json().get("models", [])]
+            if self._model_id not in names and not any(
+                n.rsplit(":", 1)[0] == self._model_id for n in names
+            ):
+                raise ModelGatewayError(
+                    f"ollama model '{self._model_id}' not present on {self._host} "
+                    f"(available: {sorted(names)})"
+                )
         except ModelGatewayError:
             raise
         except Exception as exc:  # noqa: BLE001
