@@ -68,3 +68,44 @@ def test_tool_results_round_trip(tmp_path):
     assert loaded.turns[1].tool_results == (
         ToolResult(tool="execute_capability", result='{"tier": "Gold"}'),
     )
+
+
+# --- m-17 corrupt-history fallback (2026-10-25) ---
+
+def test_corrupt_turns_json_returns_empty_conversation(tmp_path):
+    from agent_api.adapters.sqlite_conversation_repository import (
+        SqliteConversationRepository,
+    )
+
+    repo = SqliteConversationRepository(str(tmp_path / "conv.db"))
+    import sqlite3
+
+    with sqlite3.connect(str(tmp_path / "conv.db")) as conn:
+        conn.execute(
+            "INSERT INTO conversations (id, turns_json) VALUES (?, ?)",
+            ("broken", "{not valid json"),
+        )
+        conn.commit()
+    assert repo.load("broken").turns == []
+    # And the session is recoverable: the next save overwrites the row.
+    from agent_api.domain.conversation import Conversation
+
+    repo.save(Conversation(id="broken", turns=[]))
+    assert repo.load("broken").turns == []
+
+
+def test_malformed_turn_shape_returns_empty_conversation(tmp_path):
+    from agent_api.adapters.sqlite_conversation_repository import (
+        SqliteConversationRepository,
+    )
+
+    repo = SqliteConversationRepository(str(tmp_path / "conv.db"))
+    import sqlite3
+
+    with sqlite3.connect(str(tmp_path / "conv.db")) as conn:
+        conn.execute(
+            "INSERT INTO conversations (id, turns_json) VALUES (?, ?)",
+            ("broken", '[{"role": "user"}]'),  # missing "content"
+        )
+        conn.commit()
+    assert repo.load("broken").turns == []

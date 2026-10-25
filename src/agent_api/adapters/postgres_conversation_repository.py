@@ -9,9 +9,12 @@ lazily so the core stays dependency-light).
 from __future__ import annotations
 
 import json
+import logging
 
 from agent_api.domain.conversation import Conversation, ToolResult, Turn
 from agent_api.ports.conversation_repository import ConversationRepositoryError
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
@@ -71,10 +74,18 @@ class PostgresConversationRepository:
 
     @staticmethod
     def _load(conversation_id: str, turns) -> Conversation:
-        items = turns if isinstance(turns, list) else json.loads(turns or "[]")
-        return Conversation(
-            id=conversation_id,
-            turns=[
+        # m-17: same corrupt-row fallback as the SQLite adapter — a
+        # malformed row logs and yields an empty conversation instead
+        # of bricking the session on every load. (psycopg's `with conn`
+        # already closes the connection, so no closing change is needed
+        # here, unlike the sqlite3 adapters.)
+        if turns is None:
+            return Conversation(id=conversation_id, turns=[])
+        try:
+            items = turns if isinstance(turns, list) else json.loads(turns or "[]")
+            if not isinstance(items, list):
+                raise ValueError("turns_json is not a list")
+            parsed = [
                 Turn(
                     role=item["role"],
                     content=item["content"],
@@ -85,8 +96,15 @@ class PostgresConversationRepository:
                     ),
                 )
                 for item in items
-            ],
-        )
+            ]
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            logger.warning(
+                "postgres store: corrupt history for session %s (%s); "
+                "returning an empty conversation",
+                conversation_id, exc,
+            )
+            return Conversation(id=conversation_id, turns=[])
+        return Conversation(id=conversation_id, turns=parsed)
 
     def load(self, conversation_id: str) -> Conversation:
         try:

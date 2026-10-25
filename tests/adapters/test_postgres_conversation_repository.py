@@ -146,3 +146,18 @@ def test_ping(fake_pg):
     statements = [sql for sql, _ in fake_pg.conn.statements]
     assert any("INSERT INTO conversations" in sql for sql in statements)
     assert any("DELETE FROM conversations" in sql for sql in statements)
+
+
+# --- m-17 corrupt-history fallback (2026-10-25, no live DB needed) ---
+
+def test_corrupt_turns_returns_empty_conversation():
+    from agent_api.adapters.postgres_conversation_repository import (
+        PostgresConversationRepository,
+    )
+
+    assert (
+        PostgresConversationRepository._load("s", "{bad json").turns == []
+    )
+    assert (
+        PostgresConversationRepository._load("s", [{"role": "user"}]).turns == []
+    )
