@@ -63,3 +63,41 @@ def test_cors_origins_parsing(monkeypatch):
         "https://ui.example",
         "https://app.example",
     )
+
+
+# --- m-13 numeric parsing + RETRY_MAX_DELAY nit (2026-10-25) ---
+
+def test_bad_numeric_env_names_the_variable(monkeypatch):
+    monkeypatch.setenv("RETRY_MAX_ATTEMPTS", "abc")
+    with pytest.raises(ValueError, match="RETRY_MAX_ATTEMPTS"):
+        Settings.from_env()
+    monkeypatch.setenv("RETRY_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("PORT", "abc")
+    with pytest.raises(ValueError, match="PORT"):
+        Settings.from_env()
+
+
+def test_numeric_ranges_enforced(monkeypatch):
+    monkeypatch.setenv("RETRY_MAX_ATTEMPTS", "0")
+    with pytest.raises(ValueError, match="RETRY_MAX_ATTEMPTS"):
+        Settings.from_env()
+    monkeypatch.setenv("RETRY_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("RETRY_BASE_DELAY", "-0.5")
+    with pytest.raises(ValueError, match="RETRY_BASE_DELAY"):
+        Settings.from_env()
+    monkeypatch.setenv("RETRY_BASE_DELAY", "0.5")
+    monkeypatch.setenv("PORT", "70000")
+    with pytest.raises(ValueError, match="PORT"):
+        Settings.from_env()
+    monkeypatch.setenv("PORT", "8000")
+    monkeypatch.setenv("RETRY_MAX_DELAY", "-1")
+    with pytest.raises(ValueError, match="RETRY_MAX_DELAY"):
+        Settings.from_env()
+
+
+def test_retry_max_delay_configurable(monkeypatch):
+    monkeypatch.setenv("RETRY_MAX_DELAY", "2.5")
+    assert Settings.from_env().retry_max_delay == 2.5
+    assert Settings.from_env().retry_max_delay == 2.5  # default is 8.0, see below
+    monkeypatch.delenv("RETRY_MAX_DELAY")
+    assert Settings.from_env().retry_max_delay == 8.0
