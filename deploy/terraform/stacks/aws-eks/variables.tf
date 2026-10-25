@@ -70,6 +70,18 @@ variable "db_name" {
   default     = "agentdb"
 }
 
+variable "deletion_protection" {
+  description = "RDS deletion protection. Off by default so dev stacks tear down cleanly; set true for production."
+  type        = bool
+  default     = false
+}
+
+variable "skip_final_snapshot" {
+  description = "Skip a final RDS snapshot on destroy. True by default for dev; set false for production so destroy keeps a final snapshot."
+  type        = bool
+  default     = true
+}
+
 variable "tags" {
   description = "Extra tags applied to all resources."
   type        = map(string)

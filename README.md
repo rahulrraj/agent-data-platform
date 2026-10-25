@@ -156,10 +156,10 @@ environment.
 `main.py` resolves the framework × provider matrix. The service only ever
 sees a `ModelGateway`.
 
-|                      | `ollama` (local)      | `gemini` (free tier)   |
-| -------------------- | --------------------- | ---------------------- |
-| `strands` (default)  | OllamaModelGateway    | GeminiModelGateway     |
-| `langgraph`          | LangGraphOllamaGateway| LangGraphGeminiGateway |
+|                      | `ollama` (local)      | `gemini` (free tier)   | `bedrock` (AWS)        |
+| -------------------- | --------------------- | ---------------------- | ---------------------- |
+| `strands` (default)  | OllamaModelGateway    | GeminiModelGateway     | BedrockModelGateway    |
+| `langgraph`          | LangGraphOllamaGateway| LangGraphGeminiGateway | not built (clear error)|
 
 ```bash
 AGENT_FRAMEWORK=langgraph AGENT_MODEL_PROVIDER=gemini GEMINI_API_KEY=<key> python -m agent_api.main
@@ -224,14 +224,20 @@ aws ecr get-login-password --region us-east-1 \
 docker tag agent-api-lambda:latest <account>.dkr.ecr.us-east-1.amazonaws.com/agent-api-lambda:latest
 docker push <account>.dkr.ecr.us-east-1.amazonaws.com/agent-api-lambda:latest
 
-# Create the function with a Function URL (auth NONE or AWS_IAM as needed)
+# Create the function with a Function URL. The Terraform stack defaults
+# to AWS_IAM auth; NONE is dev-only (the app has no auth middleware, so
+# a public Function URL exposes every registry capability). A browser UI
+# cannot sign AWS_IAM requests, so with the default auth the CloudFront
+# UI needs a signing front door before it can call the API from a browser.
+# The deploy pipeline builds the UI with VITE_API_URL=<function_url>
+# after apply, so the shipped UI points at the real API.
 aws lambda create-function --function-name agent-api \
   --package-type Image \
   --code ImageUri=<account>.dkr.ecr.us-east-1.amazonaws.com/agent-api-lambda:latest \
   --role arn:aws:iam::<account>:role/agent-api-lambda-role \
   --timeout 900 --memory-size 1024
 aws lambda create-function-url-config --function-name agent-api \
-  --auth-type NONE --invoke-mode RESPONSE_STREAM
+  --auth-type AWS_IAM --invoke-mode RESPONSE_STREAM
 ```
 
 Required env vars on the function (the app is already env-driven, so no

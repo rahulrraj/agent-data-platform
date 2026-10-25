@@ -1,15 +1,31 @@
-# Deploy the Lambda stack. Trigger: push to main, or manual dispatch.
-# Safe to merge before AWS is wired in: the test job runs without AWS,
-# and the deploy job fails at the OIDC auth step until the role exists
-# (see deploy/terraform/README.md for the OIDC prerequisites).
+# Deploy the Lambda stack. Trigger: push to main (stack paths only), or
+# manual dispatch. Safe to merge before AWS is wired in: the test job
+# runs without AWS, and the plan job fails at the OIDC auth step until
+# the role exists (see deploy/terraform/README.md for the prerequisites).
+#
+# Flow: plan job (bootstrap ECR -> build+push image -> terraform plan,
+# plan saved as an artifact) -> apply job (gated by the `deploy-lambda`
+# GitHub environment, required reviewers) -> UI build+upload. Nothing
+# applies without a reviewed plan: there is no bare -auto-approve here.
 # Project/environment defaults here MUST match the Terraform defaults
 # (project=agent-data-platform, environment=dev) because the image name
 # is built before apply and Terraform constructs the same ECR URL.
+# ECR repo name MUST match the stack's name_prefix (project-environment
+# -lambda) plus "-api": see deploy/terraform/stacks/aws-lambda/main.tf.
+#
+# Action pins are full commit SHAs (tag in the comment), not tags:
+# Dependabot/Renovate should keep them fresh.
 name: Deploy (AWS Lambda)
 
 on:
   push:
     branches: ["main"]
+    paths:
+      - "deploy/terraform/stacks/aws-lambda/**"
+      - "deploy/terraform/modules/**"
+      - "Dockerfile.lambda"
+      - "src/ui/**"
+      - ".github/workflows/deploy-lambda.yml"
   workflow_dispatch:
 
 permissions:
@@ -24,8 +40,8 @@ jobs:
   test:
     uses: ./.github/workflows/reusable-build-test.yml
 
-  deploy:
-    name: Build, push, apply (Lambda stack)
+  plan:
+    name: Build, push, plan (Lambda stack)
     runs-on: ubuntu-latest
     needs: test
     env:
@@ -36,10 +52,10 @@ jobs:
       TF_VAR_gemini_api_key: ${{ secrets.TF_VAR_gemini_api_key }}
       TF_VAR_data_connections: ${{ secrets.TF_VAR_data_connections }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
@@ -53,31 +69,93 @@ jobs:
           aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
             | docker login --username AWS --password-stdin "$REGISTRY"
 
+      # Idempotent bootstrap: the ECR repo must exist BEFORE the push
+      # (terraform apply creates it, but runs after the push). Creating
+      # an existing repo is a no-op error, swallowed here on purpose;
+      # a real failure surfaces at the push step below.
+      - name: Bootstrap ECR repository (idempotent)
+        run: |
+          aws ecr create-repository \
+            --repository-name "${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-lambda-api" \
+            --region "${{ env.AWS_REGION }}" \
+            || echo "ECR repo already exists (or will be created by apply)"
+
       - name: Build and push Lambda image
         env:
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          IMAGE="${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-api:$IMAGE_TAG"
+          IMAGE="${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-lambda-api:$IMAGE_TAG"
           docker build -f Dockerfile.lambda -t "$IMAGE" .
           docker push "$IMAGE"
 
-      - name: Terraform apply (Lambda stack)
+      - name: Terraform plan (Lambda stack)
         working-directory: deploy/terraform/stacks/aws-lambda
         env:
           MODEL_PROVIDER: ${{ vars.MODEL_PROVIDER }}
         run: |
+          # An unset TF_VAR_data_connections secret expands to "", which
+          # would override the "{}" default with an empty string and
+          # break Lambda startup; default it here (same pattern the EKS
+          # workflow already used for its Secret).
+          export TF_VAR_data_connections="${TF_VAR_data_connections:-{}}"
           MODEL_PROVIDER="${MODEL_PROVIDER:-gemini}"
           EXTRA_VARS=""
           if [ "$MODEL_PROVIDER" = "bedrock" ]; then
             EXTRA_VARS="-var=enable_bedrock_invoke=true"
           fi
           terraform init -input=false
-          terraform apply -input=false -auto-approve \
+          terraform plan -input=false -out=tfplan \
             -var="project=${{ env.PROJECT_NAME }}" \
             -var="environment=${{ env.ENVIRONMENT }}" \
             -var="image_tag=${{ github.sha }}" \
             -var="model_provider=$MODEL_PROVIDER" \
             $EXTRA_VARS
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lambda-tfplan
+          path: deploy/terraform/stacks/aws-lambda/tfplan
+          retention-days: 7
+
+  apply:
+    name: Apply plan + deploy UI (Lambda stack)
+    runs-on: ubuntu-latest
+    needs: plan
+    # Deploy gate: create this environment in the repo (Settings ->
+    # Environments) with required reviewers before the first real
+    # deploy. GitHub auto-creates a referenced environment with NO
+    # protection if it does not exist yet, so referencing it here is
+    # safe — but until reviewers are configured, the gate is not real.
+    environment: deploy-lambda
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      PROJECT_NAME: ${{ vars.PROJECT_NAME || 'agent-data-platform' }}
+      ENVIRONMENT: ${{ vars.ENVIRONMENT || 'dev' }}
+      TF_VAR_db_password: ${{ secrets.TF_VAR_db_password }}
+      TF_VAR_gemini_api_key: ${{ secrets.TF_VAR_gemini_api_key }}
+      TF_VAR_data_connections: ${{ secrets.TF_VAR_data_connections }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: lambda-tfplan
+          path: deploy/terraform/stacks/aws-lambda
+
+      - name: Terraform apply (Lambda stack, reviewed plan only)
+        working-directory: deploy/terraform/stacks/aws-lambda
+        run: |
+          export TF_VAR_data_connections="${TF_VAR_data_connections:-{}}"
+          terraform init -input=false
+          terraform apply -input=false tfplan
 
       - name: Read stack outputs
         id: tf-out
@@ -88,11 +166,23 @@ jobs:
           echo "function_url=$(terraform output -raw function_url)" >> "$GITHUB_OUTPUT"
           echo "ui_url=$(terraform output -raw ui_url)" >> "$GITHUB_OUTPUT"
 
+      # The UI MUST be built AFTER the apply, with VITE_API_URL set to
+      # the Function URL: without it the bundle calls relative /api/*
+      # against its own CloudFront origin (S3 only), which returns HTML
+      # for /api/chat instead of JSON. Trailing slash trimmed so
+      # ${BASE}/api/... does not double-slash.
+      # NOTE: with the default function_url_auth=AWS_IAM, a browser
+      # cannot sign requests to the Function URL — see
+      # deploy/terraform/README.md. NONE is dev-only.
       - name: Build and upload UI
         working-directory: src/ui
+        env:
+          FUNCTION_URL: ${{ steps.tf-out.outputs.function_url }}
         run: |
+          FUNCTION_URL="${FUNCTION_URL%/}"
+          echo "Building UI with VITE_API_URL=$FUNCTION_URL"
           npm ci
-          npm run build
+          VITE_API_URL="$FUNCTION_URL" npm run build
           aws s3 sync dist/ "s3://${{ steps.tf-out.outputs.bucket }}" --delete
           aws cloudfront create-invalidation \
             --distribution-id "${{ steps.tf-out.outputs.distribution }}" --paths "/*"

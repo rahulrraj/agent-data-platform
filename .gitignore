@@ -7,3 +7,9 @@ venv/
 *.egg-info/
 dist/
 build/
+# Terraform state and working dirs — never commit state (it can contain
+# secrets, e.g. Lambda env vars and the RDS DSN). Remote state lives in
+# the S3 backend; see deploy/terraform/README.md.
+*.tfstate*
+.terraform/
+*.tfplan

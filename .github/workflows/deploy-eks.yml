@@ -1,14 +1,33 @@
-# Deploy the EKS stack. Trigger: push to main, or manual dispatch.
-# Safe to merge before AWS is wired in: the test job runs without AWS,
-# and the deploy job fails at the OIDC auth step until the role exists
-# (see deploy/terraform/README.md for the OIDC prerequisites).
+# Deploy the EKS stack. Trigger: push to main (stack paths only), or
+# manual dispatch. Safe to merge before AWS is wired in: the test job
+# runs without AWS, and the plan job fails at the OIDC auth step until
+# the role exists (see deploy/terraform/README.md for the prerequisites).
 # The workload stays defined by deploy/k8s/ — this workflow only
-# substitutes the ECR image URLs and the Secret values, then applies.
+# substitutes the ECR image URLs, the provider, the Ingress host, and
+# the Secret values, then applies.
+#
+# Flow: plan job (bootstrap ECR -> build+push images -> terraform plan,
+# plan saved as an artifact) -> apply job (gated by the `deploy-eks`
+# GitHub environment, required reviewers) -> manifests + rollout +
+# Ingress check. Nothing applies without a reviewed plan: there is no
+# bare -auto-approve here.
+# ECR repo names MUST match the stack's name_prefix (project-environment
+# -eks) plus "-api"/"-ui": see deploy/terraform/stacks/aws-eks/main.tf.
+#
+# Action pins are full commit SHAs (tag in the comment), not tags:
+# Dependabot/Renovate should keep them fresh.
 name: Deploy (AWS EKS)
 
 on:
   push:
     branches: ["main"]
+    paths:
+      - "deploy/terraform/stacks/aws-eks/**"
+      - "deploy/terraform/modules/**"
+      - "deploy/k8s/**"
+      - "Dockerfile"
+      - "src/ui/**"
+      - ".github/workflows/deploy-eks.yml"
   workflow_dispatch:
 
 permissions:
@@ -23,8 +42,8 @@ jobs:
   test:
     uses: ./.github/workflows/reusable-build-test.yml
 
-  deploy:
-    name: Build, push, apply, deploy manifests (EKS stack)
+  plan:
+    name: Build, push, plan (EKS stack)
     runs-on: ubuntu-latest
     needs: test
     env:
@@ -35,15 +54,13 @@ jobs:
       TF_VAR_gemini_api_key: ${{ secrets.TF_VAR_gemini_api_key }}
       TF_VAR_data_connections: ${{ secrets.TF_VAR_data_connections }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
-
-      - uses: azure/setup-kubectl@v4
 
       - name: Log in to ECR
         id: ecr
@@ -54,26 +71,91 @@ jobs:
           aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
             | docker login --username AWS --password-stdin "$REGISTRY"
 
+      # Idempotent bootstrap: the ECR repos must exist BEFORE the push
+      # (terraform apply creates them, but runs after the push).
+      # Creating an existing repo is a no-op error, swallowed here on
+      # purpose; a real failure surfaces at the push step below.
+      - name: Bootstrap ECR repositories (idempotent)
+        run: |
+          for repo in "${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-eks-api" \
+                      "${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-eks-ui"; do
+            aws ecr create-repository \
+              --repository-name "$repo" \
+              --region "${{ env.AWS_REGION }}" \
+              || echo "ECR repo $repo already exists (or will be created by apply)"
+          done
+
       - name: Build and push API + UI images
         env:
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          API_IMAGE="${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-api:$IMAGE_TAG"
-          UI_IMAGE="${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-ui:$IMAGE_TAG"
-          echo "api_image=$API_IMAGE" >> "$GITHUB_ENV"
-          echo "ui_image=$UI_IMAGE" >> "$GITHUB_ENV"
+          API_IMAGE="${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-eks-api:$IMAGE_TAG"
+          UI_IMAGE="${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-eks-ui:$IMAGE_TAG"
           docker build -t "$API_IMAGE" .
           docker push "$API_IMAGE"
           docker build -f src/ui/Dockerfile -t "$UI_IMAGE" .
           docker push "$UI_IMAGE"
 
-      - name: Terraform apply (EKS stack)
+      - name: Terraform plan (EKS stack)
         working-directory: deploy/terraform/stacks/aws-eks
         run: |
+          export TF_VAR_data_connections="${TF_VAR_data_connections:-{}}"
           terraform init -input=false
-          terraform apply -input=false -auto-approve \
+          terraform plan -input=false -out=tfplan \
             -var="project=${{ env.PROJECT_NAME }}" \
             -var="environment=${{ env.ENVIRONMENT }}"
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: eks-tfplan
+          path: deploy/terraform/stacks/aws-eks/tfplan
+          retention-days: 7
+
+  apply:
+    name: Apply plan, deploy manifests (EKS stack)
+    runs-on: ubuntu-latest
+    needs: plan
+    # Deploy gate: create this environment in the repo (Settings ->
+    # Environments) with required reviewers before the first real
+    # deploy. GitHub auto-creates a referenced environment with NO
+    # protection if it does not exist yet, so referencing it here is
+    # safe — but until reviewers are configured, the gate is not real.
+    environment: deploy-eks
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      PROJECT_NAME: ${{ vars.PROJECT_NAME || 'agent-data-platform' }}
+      ENVIRONMENT: ${{ vars.ENVIRONMENT || 'dev' }}
+      TF_VAR_db_password: ${{ secrets.TF_VAR_db_password }}
+      TF_VAR_gemini_api_key: ${{ secrets.TF_VAR_gemini_api_key }}
+      TF_VAR_data_connections: ${{ secrets.TF_VAR_data_connections }}
+      # Ingress host for deploy/k8s/ingress.yaml. Set the INGRESS_HOST
+      # repo variable to a real domain before deploying; the fallback
+      # is the committed placeholder, which routes no real traffic.
+      INGRESS_HOST: ${{ vars.INGRESS_HOST || 'agent-platform.example.com' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: eks-tfplan
+          path: deploy/terraform/stacks/aws-eks
+
+      - name: Terraform apply (EKS stack, reviewed plan only)
+        working-directory: deploy/terraform/stacks/aws-eks
+        run: |
+          export TF_VAR_data_connections="${TF_VAR_data_connections:-{}}"
+          terraform init -input=false
+          terraform apply -input=false tfplan
 
       - name: Update kubeconfig
         working-directory: deploy/terraform/stacks/aws-eks
@@ -87,8 +169,12 @@ jobs:
           MODEL_PROVIDER: ${{ vars.MODEL_PROVIDER }}
         run: |
           MODEL_PROVIDER="${MODEL_PROVIDER:-gemini}"
-          API_IMAGE="${{ env.api_image }}"
-          UI_IMAGE="${{ env.ui_image }}"
+          # Image tags were built in the plan job; rebuild the same
+          # names here from the registry + sha (no push in this job).
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+          API_IMAGE="$REGISTRY/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-eks-api:${{ github.sha }}"
+          UI_IMAGE="$REGISTRY/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-eks-ui:${{ github.sha }}"
           DSN=$(terraform output -raw rds_dsn)
           echo "::add-mask::$DSN"
           # Temp copies only — the committed manifests keep placeholders.
@@ -96,6 +182,7 @@ jobs:
           sed -i "s|agent-data-platform:latest|$API_IMAGE|" /tmp/k8s-deploy/api-deployment.yaml
           sed -i "s|agent-ui:latest|$UI_IMAGE|" /tmp/k8s-deploy/ui-deployment.yaml
           sed -i "s|AGENT_MODEL_PROVIDER: \"ollama\"|AGENT_MODEL_PROVIDER: \"$MODEL_PROVIDER\"|" /tmp/k8s-deploy/configmap.yaml
+          sed -i "s|host: agent-platform.example.com|host: $INGRESS_HOST|" /tmp/k8s-deploy/ingress.yaml
           # The in-cluster Postgres StatefulSet is NOT applied: RDS (from
           # Terraform) is the conversation store. The placeholder Secret
           # is NOT applied either: the real Secret is created below.
@@ -111,3 +198,31 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
           kubectl -n agent-platform rollout status deployment/agent-api
           kubectl -n agent-platform rollout status deployment/agent-ui
+
+      # Post-deploy Ingress check. This step MUST run against the real
+      # cluster in a real deploy (it is not skipped); it stays
+      # non-fatal (warnings, exit 0) so a cluster that is briefly
+      # unreachable, or DNS that is not cut over yet, does not fail an
+      # otherwise-green rollout — but a missing address or a failed
+      # /api/health probe is a loud warning to act on, not a pass.
+      - name: Check Ingress address and API route
+        env:
+          INGRESS_HOST: ${{ env.INGRESS_HOST }}
+        run: |
+          if ! ADDR=$(kubectl -n agent-platform get ingress agent-platform \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}{.status.loadBalancer.ingress[0].ip}' 2>/tmp/ingress-err.txt); then
+            echo "::warning::Could not read Ingress status (cluster unreachable in this run?). Ingress check skipped, not failed."
+            cat /tmp/ingress-err.txt || true
+            exit 0
+          fi
+          if [ -z "$ADDR" ]; then
+            echo "::warning::Ingress agent-platform has no load-balancer address yet — it routes no traffic. Check the ingress controller and re-check."
+            exit 0
+          fi
+          echo "Ingress address: $ADDR (host: $INGRESS_HOST)"
+          if curl -sf --max-time 15 -H "Host: $INGRESS_HOST" "http://$ADDR/api/health" > /tmp/ingress-health.txt; then
+            echo "Ingress routes /api/health OK:"
+            cat /tmp/ingress-health.txt
+          else
+            echo "::warning::Ingress has an address but /api/health did not answer via host $INGRESS_HOST (DNS may not be cut over yet). Verify routing before announcing the deployment."
+          fi

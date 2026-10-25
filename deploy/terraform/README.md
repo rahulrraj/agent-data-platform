@@ -39,43 +39,98 @@ group). The workload itself is never duplicated in Terraform:
   `deploy/k8s/ingress.yaml` Ingress routes traffic (the manifests assume
   one exists; installing it is a one-time cluster step, not Terraform).
 - GitHub Actions deploys (see below) additionally need the OIDC setup.
+- The remote-state bucket + lock table below (one-time, out-of-band).
+
+The two stacks are co-deployable in one account: each stack's
+`name_prefix` includes the stack (`…-lambda` / `…-eks`), so RDS
+identifiers and ECR repo names do not collide. (Before this, both
+stacks shared `project-environment` and the second apply failed on
+duplicates — the stacks were alternatives, not co-deployable.)
 
 ## State backend
 
-Local state by default (no backend block — do not commit state files).
-For shared/team state, add this block to the stack's `versions.tf`
-(replacing the local default) and create the bucket + lock table once,
-outside Terraform:
+Both stacks use the S3 backend in their `versions.tf` — this is
+required, not optional: CI runners are ephemeral, so local state would
+be lost between runs and the second deploy would try to re-create
+existing resources. Backend blocks cannot use variables, so the values
+below are literals in the blocks; if your account uses a different
+bucket/table/region, change them in `versions.tf` (and only there) and
+keep the workflows' plain `terraform init` (no `-backend-config`
+flags — the block is the single source of truth).
 
-```hcl
-terraform {
-  backend "s3" {
-    bucket         = "agent-data-platform-tfstate"
-    key            = "aws-lambda/terraform.tfstate" # or aws-eks/...
-    region         = "us-east-1"
-    dynamodb_table = "agent-data-platform-tf-locks"
-    encrypt        = true
-  }
-}
+The bucket + lock table are created OUT-OF-BAND, once, outside
+Terraform — this code deliberately never creates them (a stack cannot
+own the backend it stores its own state in):
+
+```bash
+aws s3api create-bucket --bucket agent-data-platform-tfstate --region us-east-1
+aws s3api put-bucket-versioning --bucket agent-data-platform-tfstate \
+  --versioning-configuration Status=Enabled
+aws dynamodb create-table --table-name agent-data-platform-tf-locks \
+  --attribute-definitions AttributeName=LockID,AttributeType=S \
+  --key-schema AttributeName=LockID,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST --region us-east-1
 ```
 
-Remote state resources are intentionally NOT created by this code.
+Per-stack keys: `aws-lambda/terraform.tfstate` and
+`aws-eks/terraform.tfstate`, region `us-east-1`, `encrypt = true`.
+Do not commit state files (`.gitignore` covers `*.tfstate*`,
+`.terraform/`, `*.tfplan`). If you previously used local state, run
+`terraform init -migrate-state` once to move it into this backend.
+
+## Lambda stack: auth, CORS, and secrets
+
+- **Function URL auth defaults to `AWS_IAM`.** The app itself has no
+  auth middleware, so a public (`NONE`) Function URL exposes every
+  registry capability — and the service account's credentials — to the
+  internet. `NONE` is dev-only: use it only for a throwaway
+  deployment, never for anything reachable beyond your own testing.
+  Consequence to plan for: a browser cannot sign `AWS_IAM` requests,
+  so with the default the CloudFront UI cannot call the Function URL
+  directly — it needs a signing front door (or a separately
+  authenticated API path) before browser traffic works.
+- **CORS:** set the stack's `cors_origins` variable to the real UI
+  origin(s) (e.g. the CloudFront `ui_url`); it is passed to the
+  function as `CORS_ORIGINS` (comma-joined). Leaving it empty keeps
+  the app's own default.
+- **Secrets:** `data_connections` is marked `sensitive` (redacted from
+  plan/apply output), but it still lands as a plaintext Lambda
+  environment variable and in Terraform state. For production, prefer
+  Secrets Manager / SSM Parameter Store for Lambda secrets (the
+  function reads the secret at startup) over passing them through this
+  variable. The same applies to `gemini_api_key` and `db_password`:
+  sensitive in Terraform is redaction, not encryption at rest in the
+  places the values are consumed.
+
+## RDS posture
+
+The shared `postgres` module sets `backup_retention_period = 7` and
+`storage_type = "gp3"`. Each stack exposes `deletion_protection`
+(default `false`) and `skip_final_snapshot` (default `true`) so
+production can set `deletion_protection = true`,
+`skip_final_snapshot = false` without forking the module; dev keeps
+clean teardown.
 
 ## First deployment (manual, no pipeline)
 
 ```bash
 cd deploy/terraform/stacks/aws-lambda   # or aws-eks
 
-# 1. Build and push the image FIRST (the stack references it by tag).
+# 1. Create the ECR repo(s) FIRST (idempotent), then build and push —
+#    the Lambda function / k8s image reference must exist at apply time.
+#    Lambda repo: agent-data-platform-dev-lambda-api
+#    EKS repos:   agent-data-platform-dev-eks-api, agent-data-platform-dev-eks-ui
+#    (project-environment-stack-image; see the stack's name_prefix.)
+aws ecr create-repository --repository-name <repo> --region us-east-1
 #    Lambda:  docker build -f Dockerfile.lambda -t <ecr-url>:latest .
 #    EKS:     docker build -t <ecr-api-url>:latest .   (repo root)
 #             docker build -f src/ui/Dockerfile -t <ecr-ui-url>:latest .
 #    Push with: aws ecr get-login-password | docker login ...
-#    (The ECR URL comes from a first `terraform apply` with no image yet
-#    only if you apply twice — simpler: apply once to create the repos,
-#    push the images, then apply again with the tag.)
 
 # 2. Apply. Secrets come from TF_VAR_* env vars, never committed values.
+#    Note: an explicitly empty TF_VAR_data_connections overrides the
+#    "{}" default with "" and breaks Lambda startup — leave it unset
+#    (or set it to real JSON) rather than exporting it empty.
 export TF_VAR_db_password='...'
 export TF_VAR_gemini_api_key='...'   # Lambda stack, gemini provider only
 terraform init
@@ -98,6 +153,7 @@ cp -r deploy/k8s /tmp/k8s-deploy
 sed -i "s|agent-data-platform:latest|<ecr-api-url>:<tag>|" /tmp/k8s-deploy/api-deployment.yaml
 sed -i "s|agent-ui:latest|<ecr-ui-url>:<tag>|" /tmp/k8s-deploy/ui-deployment.yaml
 sed -i 's|AGENT_MODEL_PROVIDER: "ollama"|AGENT_MODEL_PROVIDER: "gemini"|' /tmp/k8s-deploy/configmap.yaml
+sed -i 's|host: agent-platform.example.com|host: your-domain.example.com|' /tmp/k8s-deploy/ingress.yaml
 kubectl apply -f /tmp/k8s-deploy/namespace.yaml \
               -f /tmp/k8s-deploy/configmap.yaml \
               -f /tmp/k8s-deploy/api-deployment.yaml \
@@ -152,11 +208,37 @@ AdministratorAccess.
 | `AWS_REGION` | Variable | e.g. `us-east-1`. |
 | `TF_VAR_db_password` | Secret | RDS master password for both stacks. |
 | `TF_VAR_gemini_api_key` | Secret | GEMINI_API_KEY for the Lambda stack when provider is gemini. |
-| `TF_VAR_data_connections` | Secret (optional) | DATA_CONNECTIONS JSON, if used. |
+| `TF_VAR_data_connections` | Secret (optional) | DATA_CONNECTIONS JSON, if used. Leave unset (not empty) when unused — the workflows default an empty value to `{}`. |
+| `INGRESS_HOST` | Variable | Domain for the EKS Ingress host (deploy-eks only). Set to a real domain; the fallback is the `agent-platform.example.com` placeholder, which routes no real traffic. |
+
+Deploy gates (manual repo-settings step, do this before the first real
+deploy): create the `deploy-lambda` and `deploy-eks` environments in
+the repo (Settings → Environments) with required reviewers. The
+workflows split plan → review → apply: the plan job uploads the
+Terraform plan as an artifact, and the apply job (which carries the
+`environment:`) applies exactly that reviewed plan — there is no bare
+`-auto-approve`. GitHub auto-creates a referenced environment with NO
+protection if it does not exist yet, so the workflows are safe to merge
+before this step — but until reviewers are configured, the gate is not
+real. Deploys also only trigger on their own stack's paths (plus the
+shared modules), so a docs-only or backend-only push does not apply
+infrastructure.
 
 Until the OIDC role exists, the deploy workflows fail at the AWS auth
 step — that is expected, and the test jobs still run. The workflows are
 safe to merge before the account is wired in.
+
+## How the pipelines wire the UI to the API
+
+- Lambda: the apply job reads the stack's `function_url` output and
+  builds the UI with `VITE_API_URL=<function_url>` (trailing slash
+  trimmed) before syncing to S3 + invalidating CloudFront. Building
+  without it leaves the UI calling relative `/api/*` against S3, which
+  returns HTML, not JSON.
+- EKS: no `VITE_API_URL` is needed — the Ingress routes `/api/*` to
+  the API service. The workflow substitutes `INGRESS_HOST` into the
+  Ingress and then checks (non-fatally) that the Ingress has a
+  load-balancer address and that `/api/health` answers through it.
 
 ## How to extend: adding a platform (GCP and beyond)
 
@@ -244,9 +326,6 @@ tooling (Argo Rollouts/Flagger) earns its place on EKS.
   OIDC provider + service-account role.
 - **EKS RDS ingress is VPC-CIDR based** — tighten to the node security
   group via a launch template if needed.
-- **Base `Dockerfile` does not copy `registry/`** — the EKS image (repo
-  root) needs `CAPABILITIES_PATH` overridden or the registry mounted
-  until that is fixed; `Dockerfile.lambda` already copies it.
 - **EKS public API endpoint** — `endpoint_public_access = true` is a
   dev convenience for CI kubectl; restrict it (private endpoint +
   bastion/VPN) for production.

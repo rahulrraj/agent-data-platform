@@ -18,7 +18,11 @@
 #   The Lambda stack covers Bedrock via its execution role today.
 
 locals {
-  name_prefix = "${var.project}-${var.environment}"
+  # The stack suffix keeps this stack's resource names distinct from the
+  # aws-lambda stack's: both stacks are co-deployable in one account (RDS
+  # identifier and ECR repo names would otherwise collide). The deploy
+  # workflow's ECR repo names must match this prefix exactly.
+  name_prefix = "${var.project}-${var.environment}-eks"
   common_tags = merge(var.tags, {
     Project     = var.project
     Environment = var.environment
@@ -41,6 +45,8 @@ module "postgres" {
   db_name             = var.db_name
   username            = var.db_username
   password            = var.db_password
+  deletion_protection = var.deletion_protection
+  skip_final_snapshot = var.skip_final_snapshot
   subnet_ids          = module.networking.private_subnet_ids
   vpc_id              = module.networking.vpc_id
   allowed_cidr_blocks = [module.networking.vpc_cidr_block]

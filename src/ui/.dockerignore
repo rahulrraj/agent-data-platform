@@ -1,0 +1,7 @@
+# Covers builds run with src/ui/ as the context. Repo-root builds use
+# the root .dockerignore instead (same exclusions).
+node_modules/
+dist/
+.git/
+__pycache__/
+.env

@@ -3,7 +3,11 @@
 # cannot serve agent turns that run minutes). See ../../README.md.
 
 locals {
-  name_prefix = "${var.project}-${var.environment}"
+  # The stack suffix keeps this stack's resource names distinct from the
+  # aws-eks stack's: both stacks are co-deployable in one account (RDS
+  # identifier and ECR repo names would otherwise collide). The deploy
+  # workflow's ECR repo names must match this prefix exactly.
+  name_prefix = "${var.project}-${var.environment}-lambda"
   common_tags = merge(var.tags, {
     Project     = var.project
     Environment = var.environment
@@ -26,6 +30,8 @@ module "postgres" {
   db_name                    = var.db_name
   username                   = var.db_username
   password                   = var.db_password
+  deletion_protection        = var.deletion_protection
+  skip_final_snapshot        = var.skip_final_snapshot
   subnet_ids                 = module.networking.private_subnet_ids
   vpc_id                     = module.networking.vpc_id
   allowed_security_group_ids = [aws_security_group.lambda.id]
@@ -115,6 +121,7 @@ resource "aws_lambda_function" "api" {
       BEDROCK_MODEL_ID     = var.bedrock_model_id
       BEDROCK_EMBED_MODEL  = var.bedrock_embed_model
       DATA_CONNECTIONS     = var.data_connections
+      CORS_ORIGINS         = join(",", var.cors_origins)
       # /tmp is the only writable directory on Lambda; the embedding
       # cache rebuilds on cold start (shared cache is a follow-up).
       EMBEDDING_CACHE_PATH = "/tmp/embedding_cache.db"
