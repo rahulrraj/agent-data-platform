@@ -53,9 +53,19 @@ export default function Sidebar({
           ))}
         </nav>
         <div className="sidebar-foot">
-          <span className={`status-dot ${apiOk ? "ok" : "down"}`} />
+          {/* M-27: null = check in flight, not offline — no false
+              "API offline" flash on every load. */}
+          <span
+            className={`status-dot ${
+              apiOk === true ? "ok" : apiOk === false ? "down" : "checking"
+            }`}
+          />
           <span className="status-text">
-            {apiOk ? "API connected" : "API offline"}
+            {apiOk === true
+              ? "API connected"
+              : apiOk === false
+                ? "API offline"
+                : "Checking API…"}
           </span>
         </div>
       </aside>

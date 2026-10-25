@@ -12,8 +12,9 @@ function ToolPill({ tools, live }) {
   );
 }
 
-export function Message({ message }) {
-  const { role, content, tools, error, streaming } = message;
+export function Message({ message, onRetry }) {
+  const { role, content, tools, error, errorMessage, partial, streaming } =
+    message;
   if (role === "user") {
     return (
       <div className="msg user">
@@ -21,20 +22,40 @@ export function Message({ message }) {
       </div>
     );
   }
+  // M-24/M-25: a failed turn keeps its partial markdown and tool pills;
+  // the error is a separate banner below it, with a retry affordance.
+  // (Legacy `error` shape, without errorMessage, keeps its old rendering.)
   return (
-    <div className={`msg assistant ${error ? "error" : ""}`}>
+    <div
+      className={`msg assistant ${error || errorMessage ? "error" : ""}`}
+    >
       <div className="avatar">
         <Sparkle size={20} />
       </div>
       <div className="msg-body">
         <ToolPill tools={tools} live={streaming && tools?.length > 0} />
-        {error ? (
+        {error && !errorMessage ? (
           <div className="error-note">{content}</div>
         ) : (
-          <div className="md">
-            {renderMarkdown(content || "")}
-            {streaming && <span className="cursor" />}
-          </div>
+          <>
+            <div className="md">
+              {renderMarkdown(content || "")}
+              {streaming && <span className="cursor" />}
+            </div>
+            {errorMessage && (
+              <div className="error-note">
+                {partial
+                  ? "Reply incomplete — showing what arrived before the error. "
+                  : ""}
+                {errorMessage}
+                {onRetry && (
+                  <button className="retry-btn" onClick={onRetry}>
+                    Retry
+                  </button>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

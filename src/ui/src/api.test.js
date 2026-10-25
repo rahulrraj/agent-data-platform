@@ -120,4 +120,22 @@ describe("streamChat", () => {
     controller.abort();
     await expect(gen.next()).rejects.toThrow();
   });
+
+  it("throws an incomplete-reply error on EOF without [DONE] (M-24)", async () => {
+    mockFetch([ev("text", "half an ")]);
+    await expect(collect()).rejects.toThrow("Incomplete reply");
+  });
+
+  it("yields what arrived, then throws, on truncated EOF (M-24)", async () => {
+    mockFetch([ev("text", "half an ")]);
+    const gen = streamChat("hi", "s1");
+    const first = await gen.next();
+    expect(first.value).toEqual({ type: "text", payload: "half an " });
+    await expect(gen.next()).rejects.toThrow("Incomplete reply");
+  });
+
+  it("throws on a trailing partial frame with no terminator (M-24)", async () => {
+    mockFetch([ev("text", "done."), 'data: {"type": "text", "payload": "cut']);
+    await expect(collect()).rejects.toThrow("Incomplete reply");
+  });
 });

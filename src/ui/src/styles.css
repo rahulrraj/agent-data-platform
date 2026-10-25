@@ -665,3 +665,33 @@ button {
     max-width: 88%;
   }
 }
+
+/* ---------- code-review 2026-10-24 fixes (M-27, M-25, M-29) ---------- */
+
+.status-dot.checking {
+  background: #d99a2b;
+}
+
+.error-note .retry-btn {
+  margin-left: 10px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--danger);
+  background: transparent;
+  color: var(--danger);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.jump-latest {
+  align-self: center;
+  margin-bottom: 10px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--sidebar-bg);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+}

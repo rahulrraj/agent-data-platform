@@ -3,19 +3,14 @@ import Sidebar from "./components/Sidebar.jsx";
 import Composer from "./components/Composer.jsx";
 import { Message, Welcome } from "./components/Message.jsx";
 import { MenuIcon, MoonIcon, Sparkle, SunIcon } from "./components/icons.jsx";
-import { getHealth, streamChat } from "./api.js";
+import { getHealth, getReadiness, streamChat } from "./api.js";
+import { loadSessions, saveSessions } from "./sessions.js";
 
+// M-28: collision-proof, unguessable ids. crypto.randomUUID() needs a
+// secure context (localhost / https); fall back only where it is absent.
 const uid = () =>
+  globalThis.crypto?.randomUUID?.() ??
   Math.random().toString(36).slice(2) + Date.now().toString(36);
-
-function loadSessions() {
-  try {
-    const raw = JSON.parse(localStorage.getItem("agent.sessions") || "[]");
-    return Array.isArray(raw) ? raw : [];
-  } catch {
-    return [];
-  }
-}
 
 function prettyModel(label) {
   // "strands:ollama:qwen2.5:1.5b" -> "qwen2.5:1.5b · strands/ollama"
@@ -33,6 +28,9 @@ export default function App() {
   const [activeId, setActiveId] = useState(() => loadSessions()[0]?.id ?? null);
   const [streaming, setStreaming] = useState(false);
   const [apiOk, setApiOk] = useState(null);
+  const [readyOk, setReadyOk] = useState(null);
+  const [readyFailing, setReadyFailing] = useState([]);
+  const [storageWarning, setStorageWarning] = useState(false);
   const [modelLabel, setModelLabel] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [theme, setTheme] = useState(
@@ -40,38 +38,76 @@ export default function App() {
   );
   const abortRef = useRef(null);
   const bottomRef = useRef(null);
+  const chatRef = useRef(null);
+  // M-29: auto-scroll only while the user is already near the bottom.
+  const nearBottomRef = useRef(true);
+  const [showJump, setShowJump] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem("agent.theme", theme);
+    try {
+      localStorage.setItem("agent.theme", theme);
+    } catch {
+      setStorageWarning(true);
+    }
   }, [theme]);
 
+  // M-26: quota-safe save; a failed save raises a visible warning
+  // instead of silently losing later turns on reload.
   useEffect(() => {
-    localStorage.setItem("agent.sessions", JSON.stringify(sessions));
+    setStorageWarning(!saveSessions(sessions).ok);
   }, [sessions]);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const h = await getHealth();
-        if (!cancelled) {
-          setApiOk(true);
-          setModelLabel(h.model || "");
-        }
-      } catch {
-        if (!cancelled) setApiOk(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+  // M-27: liveness + readiness, polled and re-checked on focus and
+  // after a send failure (see send's catch). `null` = check in flight.
+  const checkHealth = useCallback(async () => {
+    try {
+      const h = await getHealth();
+      setApiOk(true);
+      setModelLabel(h.model || "");
+    } catch {
+      setApiOk(false);
+    }
+    try {
+      const r = await getReadiness();
+      setReadyOk(r.ok);
+      setReadyFailing(r.ok ? [] : r.body?.failing || []);
+    } catch {
+      setReadyOk(null);
+    }
   }, []);
+
+  useEffect(() => {
+    checkHealth();
+    const timer = setInterval(checkHealth, 30000);
+    window.addEventListener("focus", checkHealth);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", checkHealth);
+    };
+  }, [checkHealth]);
 
   const active = sessions.find((s) => s.id === activeId) || null;
 
-  useEffect(() => {
+  const handleScroll = useCallback(() => {
+    const el = chatRef.current;
+    if (!el) return;
+    const near =
+      el.scrollHeight - el.scrollTop - el.clientHeight <= 80;
+    nearBottomRef.current = near;
+    setShowJump(!near);
+  }, []);
+
+  const jumpToLatest = useCallback(() => {
+    nearBottomRef.current = true;
+    setShowJump(false);
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, []);
+
+  useEffect(() => {
+    if (nearBottomRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
   }, [active?.messages?.length, active?.messages?.at(-1)?.content]);
 
   const patchSession = useCallback((sid, fn) => {
@@ -97,11 +133,11 @@ export default function App() {
   );
 
   const send = useCallback(
-    async (text) => {
+    async (text, targetSid = null) => {
       const msg = text.trim();
       if (!msg || streaming) return;
 
-      let sid = activeId;
+      let sid = targetSid || activeId;
       if (!sid || !sessions.some((s) => s.id === sid)) {
         sid = uid();
         const fresh = {
@@ -136,9 +172,13 @@ export default function App() {
       const ctrl = new AbortController();
       abortRef.current = ctrl;
       setStreaming(true);
+      // M-24/M-25: content/tools live outside the try so the catch can
+      // preserve the partial answer instead of replacing it with the
+      // error text. A mid-stream `error` event and an EOF without
+      // [DONE] ("Incomplete reply…") both land here with partial state.
+      let content = "";
+      const tools = [];
       try {
-        let content = "";
-        const tools = [];
         for await (const ev of streamChat(msg, sid, ctrl.signal)) {
           if (ev.type === "text") content += ev.payload || "";
           else if (ev.type === "tool" && !tools.includes(ev.payload))
@@ -160,26 +200,52 @@ export default function App() {
         }));
       } catch (e) {
         if (e.name === "AbortError") {
+          // User stopped: keep whatever arrived, no error banner.
           patchSession(sid, (s) => ({
             messages: s.messages.map((m, i) =>
-              i === s.messages.length - 1 ? { ...m, streaming: false } : m
+              i === s.messages.length - 1
+                ? { ...m, streaming: false, content, tools: [...tools] }
+                : m
             ),
           }));
         } else {
           patchSession(sid, (s) => ({
             messages: s.messages.map((m, i) =>
               i === s.messages.length - 1
-                ? { ...m, streaming: false, error: true, content: e.message }
+                ? {
+                    ...m,
+                    streaming: false,
+                    content,
+                    tools: [...tools],
+                    partial: content.length > 0,
+                    errorMessage: e.message,
+                  }
                 : m
             ),
           }));
+          // M-27: a send failure may mean the API went away — re-check.
+          checkHealth();
         }
       } finally {
         setStreaming(false);
         abortRef.current = null;
       }
     },
-    [activeId, sessions, streaming, patchSession]
+    [activeId, sessions, streaming, patchSession, checkHealth]
+  );
+
+  // Retry after a partial/error message: re-ask the preceding user turn
+  // as a fresh turn, leaving the partial answer in place above it.
+  const retry = useCallback(
+    (sid, msgIndex) => {
+      const session = sessions.find((s) => s.id === sid);
+      const prev = session?.messages?.[msgIndex - 1];
+      if (prev?.role === "user") {
+        setActiveId(sid);
+        send(prev.content, sid);
+      }
+    },
+    [sessions, send]
   );
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
@@ -226,16 +292,30 @@ export default function App() {
           </button>
         </header>
 
-        <div className="chat">
+        <div className="chat" ref={chatRef} onScroll={handleScroll}>
           <div className="chat-inner">
             {!active || active.messages.length === 0 ? (
               <Welcome onSuggest={send} />
             ) : (
-              active.messages.map((m, i) => <Message key={i} message={m} />)
+              active.messages.map((m, i) => (
+                <Message
+                  key={i}
+                  message={m}
+                  onRetry={
+                    m.errorMessage ? () => retry(active.id, i) : undefined
+                  }
+                />
+              ))
             )}
             <div ref={bottomRef} />
           </div>
         </div>
+
+        {showJump && active?.messages?.length > 0 && (
+          <button className="jump-latest" onClick={jumpToLatest}>
+            ↓ Jump to latest
+          </button>
+        )}
 
         {apiOk === false && (
           <div className="api-banner">
@@ -244,11 +324,26 @@ export default function App() {
           </div>
         )}
 
+        {apiOk === true && readyOk === false && (
+          <div className="api-banner">
+            API is up but not ready
+            {readyFailing.length > 0 && `: ${readyFailing.join(", ")}`}. Sending
+            is disabled until it recovers.
+          </div>
+        )}
+
+        {storageWarning && (
+          <div className="api-banner">
+            Storage full — new messages may not be saved. Delete old
+            conversations to free space.
+          </div>
+        )}
+
         <Composer
           onSend={send}
           onStop={stop}
           streaming={streaming}
-          disabled={apiOk === false}
+          disabled={apiOk === false || readyOk === false}
         />
       </main>
     </div>

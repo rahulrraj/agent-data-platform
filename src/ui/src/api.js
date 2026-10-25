@@ -32,6 +32,7 @@ export async function* streamChat(message, sessionId, signal) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
+  let sawDone = false;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -42,12 +43,25 @@ export async function* streamChat(message, sessionId, signal) {
       buf = buf.slice(idx + 2);
       if (!raw.startsWith("data:")) continue;
       const data = raw.slice(5).trim();
-      if (data === "[DONE]") return;
+      if (data === "[DONE]") {
+        sawDone = true;
+        return;
+      }
       try {
         yield JSON.parse(data);
       } catch {
         // ignore malformed chunks
       }
     }
+  }
+  // M-24: EOF without [DONE] is a truncated reply, not a complete answer.
+  // Any trailing partial frame in `buf` is discarded, and the caller must
+  // surface the partial content with an error (see App.jsx), never as
+  // a finished message. AbortError propagates from reader.read() above
+  // and is deliberately not converted into this error.
+  if (!sawDone) {
+    throw new Error(
+      "Incomplete reply: the stream ended before the server finished"
+    );
   }
 }
