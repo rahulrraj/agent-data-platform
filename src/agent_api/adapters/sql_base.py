@@ -21,11 +21,20 @@ import re
 
 from agent_api.domain.capability import Capability
 from agent_api.platform.retry import RetryPolicy, call_with_retry
-from agent_api.ports.capability_executor import CapabilityExecutorError
+from agent_api.ports.capability_executor import (
+    CapabilityExecutor,
+    CapabilityExecutorError,
+)
 
 
-class SqlExecutorBase:
-    """CapabilityExecutor skeleton for DBAPI databases."""
+class SqlExecutorBase(CapabilityExecutor):
+    """CapabilityExecutor skeleton for DBAPI databases.
+
+    Subclassing the port (m-2) means signature drift in the base or a
+    leaf is caught by a type checker, not only at runtime — the same
+    shared-base sanction ADR 0003 gives the framework bases, now
+    recorded for executors in ADR 0006.
+    """
 
     max_rows = 50  # guardrail: never dump unbounded results into the model
 

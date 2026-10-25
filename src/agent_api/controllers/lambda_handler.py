@@ -41,6 +41,10 @@ Transport facts (read before deploying):
   writable directory); the cache then rebuilds on cold start, which at
   thousands of capabilities means thousands of embedding calls per cold
   start — a shared cache is the follow-up, not built here.
+  These requirements are ENFORCED, not just documented (m-11):
+  composition.build_app() fails fast when it runs under Lambda
+  (AWS_LAMBDA_FUNCTION_NAME set) with a non-postgres store or a cache
+  path outside /tmp.
 - The app is built once per execution environment and reused across
   warm invocations (Lambda container reuse); cold starts pay the full
   build cost (model gateway construction, capability registry load).

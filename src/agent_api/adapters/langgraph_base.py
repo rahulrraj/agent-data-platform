@@ -27,7 +27,7 @@ from langchain_core.tools import StructuredTool
 
 from agent_api.domain.conversation import ASSISTANT, USER, Conversation, ToolResult, Turn
 from agent_api.platform.retry import RetryPolicy, backoff_delay, call_with_retry
-from agent_api.ports.model_gateway import ModelGatewayError, StreamChunk
+from agent_api.ports.model_gateway import ModelGateway, ModelGatewayError, StreamChunk
 
 
 def to_langchain_tool(strands_tool) -> StructuredTool:
@@ -50,8 +50,12 @@ def to_langchain_tool(strands_tool) -> StructuredTool:
     )
 
 
-class LangGraphGatewayBase:
-    """ModelGateway skeleton around a LangGraph ReAct agent."""
+class LangGraphGatewayBase(ModelGateway):
+    """ModelGateway skeleton around a LangGraph ReAct agent.
+
+    Subclassing the port (m-2) so type checkers verify conformance
+    instead of relying on duck typing.
+    """
 
     def __init__(
         self,

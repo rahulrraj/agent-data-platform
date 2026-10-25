@@ -76,10 +76,18 @@ def load_tools(deps: ToolDeps | None = None) -> list[Any]:
                 continue  # factory plugin needs dependencies
             tools.append(create_tool(deps))
             continue
-        for attr_name in dir(tool_module):
+        # Only tools DEFINED in this plugin module: a @tool function
+        # re-exported via import lives in the module's __dict__ too, so
+        # the __dict__ test alone would still register it. The
+        # __module__ check is the test that actually excludes re-exports
+        # (a re-exported tool's __module__ is its home module, not this
+        # plugin's), so a plugin can import a sibling's tool without
+        # silently registering it twice under this plugin.
+        for attr_name, candidate in vars(tool_module).items():
             if attr_name.startswith("_"):
                 continue
-            candidate = getattr(tool_module, attr_name)
+            if getattr(candidate, "__module__", None) != tool_module.__name__:
+                continue
             if _is_strands_tool(candidate):
                 tools.append(candidate)
     tools.sort(key=lambda t: t.tool_name)

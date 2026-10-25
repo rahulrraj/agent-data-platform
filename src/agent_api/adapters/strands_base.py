@@ -20,11 +20,15 @@ from strands import Agent
 
 from agent_api.domain.conversation import ASSISTANT, Conversation, ToolResult, Turn
 from agent_api.platform.retry import RetryPolicy, backoff_delay, call_with_retry
-from agent_api.ports.model_gateway import ModelGatewayError, StreamChunk
+from agent_api.ports.model_gateway import ModelGateway, ModelGatewayError, StreamChunk
 
 
-class StrandsGatewayBase:
-    """ModelGateway skeleton around a Strands agent."""
+class StrandsGatewayBase(ModelGateway):
+    """ModelGateway skeleton around a Strands agent.
+
+    Subclassing the port (m-2) so type checkers verify conformance
+    instead of relying on duck typing.
+    """
 
     def __init__(
         self,
