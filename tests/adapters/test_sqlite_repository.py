@@ -49,3 +49,22 @@ def test_data_survives_reopen(tmp_path):
 
     repo2 = SqliteConversationRepository(path)
     assert [t.content for t in repo2.load("s1").turns] == ["persist me"]
+
+
+def test_tool_results_round_trip(tmp_path):
+    # M-13: tool results survive a save/load cycle.
+    from agent_api.domain.conversation import ASSISTANT, ToolResult, USER
+
+    repo = SqliteConversationRepository(str(tmp_path / "c.db"))
+    conv = Conversation(id="s")
+    conv.add_user("what tier?")
+    conv.add_assistant(
+        "Gold tier",
+        ("execute_capability",),
+        (ToolResult(tool="execute_capability", result='{"tier": "Gold"}'),),
+    )
+    repo.save(conv)
+    loaded = repo.load("s")
+    assert loaded.turns[1].tool_results == (
+        ToolResult(tool="execute_capability", result='{"tier": "Gold"}'),
+    )

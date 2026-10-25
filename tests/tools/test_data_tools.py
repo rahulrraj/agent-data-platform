@@ -166,3 +166,21 @@ def test_factory_tools_skipped_without_deps():
     names = tool_names(load_tools())
     assert "discover_capability" not in names
     assert "calculate" in names
+
+
+def test_execute_rejects_undiscovered_capability():
+    # M-11: a known id that discover never returned is refused, with an
+    # instruction to discover first — hard reject, not advisory.
+    deps = ToolDeps(
+        capability_registry=FakeRegistry(_caps()),
+        embedding_gateway=FakeEmbeddings(),
+        capability_executors={"snowflake": FakeExecutor(), "http": FakeExecutor()},
+    )
+    execute = create_execute(deps)
+    out = execute("customer_by_id", {"customer_id": "C-123"})
+    assert "discover_capability first" in out
+    # After discovering, the same call runs.
+    discover = create_discover(deps)
+    discover("customer tier lookup")
+    out = json.loads(execute("customer_by_id", {"customer_id": "C-123"}))
+    assert out["rows"][0]["tier"] == "Gold"

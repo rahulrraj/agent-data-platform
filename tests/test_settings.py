@@ -46,3 +46,20 @@ def test_bad_provider_rejected(monkeypatch):
     monkeypatch.setenv("AGENT_MODEL_PROVIDER", "azure")
     with pytest.raises(ValueError, match="AGENT_MODEL_PROVIDER"):
         Settings.from_env()
+
+
+def test_empty_data_connections_means_empty_dict(monkeypatch):
+    # M-21: an unset secret expanding to "" must not crash startup.
+    monkeypatch.setenv("DATA_CONNECTIONS", "")
+    assert Settings.from_env().data_connections == {}
+    monkeypatch.setenv("DATA_CONNECTIONS", "   ")
+    assert Settings.from_env().data_connections == {}
+
+
+def test_cors_origins_parsing(monkeypatch):
+    assert Settings.from_env().cors_origins == ()
+    monkeypatch.setenv("CORS_ORIGINS", "https://ui.example, https://app.example ,")
+    assert Settings.from_env().cors_origins == (
+        "https://ui.example",
+        "https://app.example",
+    )

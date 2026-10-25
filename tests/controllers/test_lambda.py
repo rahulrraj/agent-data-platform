@@ -96,12 +96,14 @@ def v2_event(method: str, path: str, body: dict | None = None) -> dict:
 def call_lambda(method: str, path: str, body: dict | None = None, **service_kwargs) -> dict:
     """Invoke the handler with the test app patched in (fresh per call)."""
     app = create_app(FakeService(**service_kwargs), model_label="test:model")
+    original_build_app = lambda_handler.build_app
     lambda_handler.build_app = lambda: app  # noqa: ARG001 — handler builds with no args
     lambda_handler._mangum = None
     try:
         return lambda_handler.handler(v2_event(method, path, body), FakeContext())
     finally:
         lambda_handler._mangum = None
+        lambda_handler.build_app = original_build_app
 
 
 def test_health():

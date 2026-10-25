@@ -134,7 +134,11 @@ class HttpCapabilityExecutor(CapabilityExecutor):
                 raise CapabilityExecutorError(
                     f"path parameter '{name}' must not contain '/'"
                 )
-            encoded[name] = urllib.parse.quote(value, safe="")
+            # Opted-in params keep "/" as a segment separator; everything
+            # else is fully encoded (including "/").
+            encoded[name] = urllib.parse.quote(
+                value, safe="/" if name in multi_segment else ""
+            )
         try:
             path = path_template.format(**encoded)
         except KeyError as exc:
