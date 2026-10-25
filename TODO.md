@@ -79,6 +79,17 @@ can move.
 - **Recorded eval set for behavior changes** — planned (see
   `doc/agent-lifecycle.md`).
 
+## Observability (to review)
+
+- **Review how observability is handled** — current state is thin: application
+  logs only (no structured audit log of capability executions, no tracing,
+  no per-turn token/latency/cost recording, no task-level records). Review
+  what we should record per turn and per tool/capability call, where it
+  should live, and what it costs — using Conductor OSS's automatic
+  per-task records (prompt, response, tokens, latency, retries) as one
+  reference point. Related: the structured audit log item under
+  Capabilities and guardrails below.
+
 ## Agent interoperability
 
 - **A2A (Agent2Agent) support** — let this platform's agent interoperate
