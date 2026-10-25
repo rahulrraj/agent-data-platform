@@ -89,6 +89,13 @@ can move.
   per-task records (prompt, response, tokens, latency, retries) as one
   reference point. Related: the structured audit log item under
   Capabilities and guardrails below.
+- Review done 2026-10-25 (OTLP research + page `agent-observability-otlp-review`):
+  Strands is natively OTLP; recommended minimal setup is framework-native
+  OTel + FastAPI/HTTPX instrumentation → direct OTLP on Lambda (with flush,
+  else the freeze/thaw trap loses spans) / Collector on EKS → Langfuse
+  Cloud or self-hosted Phoenix; per-turn and per-capability record specs,
+  sampling, PII handling, and retention are on the page. Remaining: pick a
+  backend and wire the exporter in (not started).
 
 ## Agent interoperability
 
