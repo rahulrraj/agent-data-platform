@@ -45,3 +45,12 @@ def test_ping_ok(tmp_path):
 def test_ping_bad_path():
     with pytest.raises(Exception):
         SqliteEmbeddingCache("/nonexistent-dir-xyz/emb.db").ping()
+
+
+def test_vector_dim_recorded_and_prune_drops_other_models(tmp_path):
+    cache = SqliteEmbeddingCache(str(tmp_path / "emb.db"))
+    cache.save([_row("a", model="m1"), _row("b", model="m2")])
+    assert cache.load("m1")["a"].vector_dim == 3
+    cache.prune_models({"m1"})
+    assert set(cache.load("m1")) == {"a"}
+    assert cache.load("m2") == {}

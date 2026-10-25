@@ -35,7 +35,16 @@ class Capability:
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Cosine similarity in [-1, 1]. Pure math, no dependencies."""
+    """Cosine similarity in [-1, 1]. Pure math, no dependencies.
+
+    Dimension mismatch is an error, not a silent zip-truncate (m-16):
+    a cached vector from a different embedding-model version must never
+    produce a quietly wrong ranking.
+    """
+    if len(a) != len(b):
+        raise ValueError(
+            f"cosine_similarity: dimension mismatch {len(a)} vs {len(b)}"
+        )
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(x * x for x in b))

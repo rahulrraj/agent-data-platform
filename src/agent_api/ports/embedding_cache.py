@@ -23,6 +23,11 @@ class CachedEmbedding:
     description_hash: str  # sha256 of the description text that was embedded
     model: str  # embedding model id, e.g. "nomic-embed-text"
     vector: tuple[float, ...]
+    # Dimension recorded at save time (m-16): a row whose stored
+    # dimension disagrees with its vector length is corrupt and must be
+    # re-embedded, not silently compared. None for rows written before
+    # this field existed.
+    vector_dim: int | None = None
 
 
 class EmbeddingCacheError(Exception):

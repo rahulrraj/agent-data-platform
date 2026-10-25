@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import array
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 
 from agent_api.ports.embedding_cache import CachedEmbedding, EmbeddingCacheError
@@ -18,6 +19,7 @@ CREATE TABLE IF NOT EXISTS capability_embeddings (
     model TEXT NOT NULL,
     description_hash TEXT NOT NULL,
     vector BLOB NOT NULL,
+    vector_dim INTEGER,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (capability_id, model)
 )
@@ -40,22 +42,43 @@ class SqliteEmbeddingCache:
     def __init__(self, path: str) -> None:
         self._path = path
         try:
-            with sqlite3.connect(path) as conn:
+            # closing(): sqlite3's `with conn` commits/rolls back but
+            # does NOT close the connection — the old code relied on
+            # refcounting to close it (nit). Every method here now
+            # closes explicitly.
+            with closing(sqlite3.connect(path)) as conn:
                 conn.execute(_SCHEMA)
+                # Migration for pre-vector_dim databases: CREATE TABLE
+                # IF NOT EXISTS never adds the column to an old file.
+                columns = {
+                    row[1]
+                    for row in conn.execute(
+                        "PRAGMA table_info(capability_embeddings)"
+                    ).fetchall()
+                }
+                if "vector_dim" not in columns:
+                    conn.execute(
+                        "ALTER TABLE capability_embeddings "
+                        "ADD COLUMN vector_dim INTEGER"
+                    )
+                conn.commit()
         except Exception as exc:  # noqa: BLE001
             raise EmbeddingCacheError(f"embedding cache init failed: {exc}") from exc
 
     def load(self, model: str) -> dict[str, CachedEmbedding]:
         try:
-            with sqlite3.connect(self._path) as conn:
+            with closing(sqlite3.connect(self._path)) as conn:
                 rows = conn.execute(
-                    "SELECT capability_id, description_hash, vector"
+                    "SELECT capability_id, description_hash, vector, vector_dim"
                     " FROM capability_embeddings WHERE model = ?",
                     (model,),
                 ).fetchall()
             return {
-                capability_id: CachedEmbedding(capability_id, description_hash, model, _decode(vector))
-                for capability_id, description_hash, vector in rows
+                capability_id: CachedEmbedding(
+                    capability_id, description_hash, model,
+                    _decode(vector), vector_dim,
+                )
+                for capability_id, description_hash, vector, vector_dim in rows
             }
         except EmbeddingCacheError:
             raise
@@ -65,24 +88,51 @@ class SqliteEmbeddingCache:
     def save(self, embeddings: list[CachedEmbedding]) -> None:
         try:
             now = datetime.now(timezone.utc).isoformat()
-            with sqlite3.connect(self._path) as conn:
+            with closing(sqlite3.connect(self._path)) as conn:
                 conn.executemany(
                     "INSERT OR REPLACE INTO capability_embeddings"
-                    " (capability_id, model, description_hash, vector, updated_at)"
-                    " VALUES (?, ?, ?, ?, ?)",
+                    " (capability_id, model, description_hash, vector,"
+                    "  vector_dim, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
                     [
-                        (e.capability_id, e.model, e.description_hash, _encode(e.vector), now)
+                        (e.capability_id, e.model, e.description_hash,
+                         _encode(e.vector), len(e.vector), now)
                         for e in embeddings
                     ],
                 )
+                conn.commit()
         except EmbeddingCacheError:
             raise
         except Exception as exc:  # noqa: BLE001
             raise EmbeddingCacheError(f"embedding cache save failed: {exc}") from exc
 
+    def prune_models(self, keep: set[str]) -> None:
+        """Delete rows for models no longer in use (m-16c).
+
+        Switching embedding models used to leave old-model rows in the
+        file forever. The caller passes the one model in use; anything
+        else is stale. Best-effort from discovery's side.
+        """
+        try:
+            with closing(sqlite3.connect(self._path)) as conn:
+                if keep:
+                    placeholders = ",".join("?" for _ in keep)
+                    conn.execute(
+                        "DELETE FROM capability_embeddings "
+                        f"WHERE model NOT IN ({placeholders})",
+                        tuple(keep),
+                    )
+                else:
+                    conn.execute("DELETE FROM capability_embeddings")
+                conn.commit()
+        except EmbeddingCacheError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise EmbeddingCacheError(f"embedding cache prune failed: {exc}") from exc
+
     def ping(self) -> None:
         try:
-            with sqlite3.connect(self._path) as conn:
+            with closing(sqlite3.connect(self._path)) as conn:
                 conn.execute("SELECT 1 FROM capability_embeddings LIMIT 1").fetchone()
         except EmbeddingCacheError:
             raise

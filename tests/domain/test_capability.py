@@ -19,3 +19,9 @@ def test_opposite_vectors_score_minus_one():
 
 def test_zero_vector_scores_zero():
     assert cosine_similarity([0.0, 0.0], [1.0, 1.0]) == 0.0
+
+
+def test_cosine_dimension_mismatch_raises():
+    # m-16a: never silently zip-truncate mismatched vectors.
+    with pytest.raises(ValueError, match="dimension mismatch"):
+        cosine_similarity([1.0, 2.0], [1.0, 2.0, 3.0])

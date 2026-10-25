@@ -125,3 +125,43 @@ def test_no_cache_behaves_as_before():
         _deps(FakeRegistry({"a": "customer lookup"}), embeddings, None))
     assert json.loads(discover("customer"))["id"] == "a"
     assert embeddings.calls == [["customer lookup"], ["customer"]]
+
+
+# --- m-16 embedding-cache edge cases (2026-10-25) ---
+
+class _ShortEmbeddings(FakeEmbeddings):
+    def embed(self, texts):
+        self.calls.append(list(texts))
+        # Returns fewer vectors than texts (a broken gateway).
+        return [[1.0, 0.0]]
+
+
+def test_short_embed_result_is_unavailable_not_key_error(tmp_path):
+    cache = SqliteEmbeddingCache(str(tmp_path / "emb.db"))
+    embeddings = _ShortEmbeddings()
+    registry = FakeRegistry({"a": "customer lookup", "b": "order lookup"})
+    tool = create_discover(_deps(registry, embeddings, cache))
+    out = tool("customer")
+    assert "temporarily unavailable" in out
+    assert "cannot look it up" in out
+
+
+def test_mixed_dimension_cache_is_re_embedded(tmp_path):
+    cache = SqliteEmbeddingCache(str(tmp_path / "emb.db"))
+    # Seed rows whose vectors disagree in dimension (model changed
+    # under the same model string): 3-dim for "a", 2-dim for "b".
+    from agent_api.ports.embedding_cache import CachedEmbedding
+
+    cache.save([
+        CachedEmbedding("a", __import__("hashlib").sha256(b"customer lookup").hexdigest(),
+                        "test-model", (1.0, 0.0, 0.0)),
+        CachedEmbedding("b", __import__("hashlib").sha256(b"order lookup").hexdigest(),
+                        "test-model", (0.0, 1.0)),
+    ])
+    embeddings = FakeEmbeddings()
+    registry = FakeRegistry({"a": "customer lookup", "b": "order lookup"})
+    tool = create_discover(_deps(registry, embeddings, cache))
+    # The mixed-dimension index must be discarded and re-embedded
+    # (2-dim vectors from the fake), not ranked by truncation.
+    assert json.loads(tool("customer"))["id"] == "a"
+    assert any(len(call) == 2 for call in embeddings.calls)

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 
 from strands import tool
 
@@ -93,9 +94,16 @@ def create_tool(deps):
     # cache key is the hash of the indexed text, so editing a parameter
     # description invalidates that capability's vector.
     cache: dict = {}
+    index_lock = threading.Lock()
 
     def _index():
-        if "vectors" not in cache:
+        # m-16c: the in-memory index used to be built without a lock,
+        # so concurrent first discoveries duplicated the embed work.
+        if "vectors" in cache:
+            return cache["vectors"]
+        with index_lock:
+            if "vectors" in cache:
+                return cache["vectors"]
             capabilities = registry.list_all()
             model = embedding_gateway.model_name
             stored: dict = {}
@@ -108,13 +116,41 @@ def create_tool(deps):
             pending: list = []
             for cap in capabilities:
                 hit = stored.get(cap.id)
-                if hit is not None and hit.description_hash == _text_hash(_index_text(cap)):
+                # m-16a: a stored row whose recorded dimension disagrees
+                # with its vector length is corrupt — re-embed it, don't
+                # compare it. (Same-name model changes that keep the
+                # model string but change dimensions are caught below
+                # by the cross-vector dimension check.)
+                if (
+                    hit is not None
+                    and hit.description_hash == _text_hash(_index_text(cap))
+                    and (
+                        getattr(hit, "vector_dim", None) is None
+                        or hit.vector_dim == len(hit.vector)
+                    )
+                ):
                     hits[cap.id] = list(hit.vector)
                 else:
                     pending.append(cap)
+            if len({len(v) for v in hits.values()}) > 1:
+                # Cached vectors disagree about dimensions (e.g. the
+                # embedding model changed under the same model string):
+                # no ranking over them is meaningful. Drop the lot and
+                # re-embed everything rather than zip-truncating.
+                hits = {}
+                pending = list(capabilities)
             if pending:
                 # May raise: the caller turns it into "temporarily unavailable".
                 fresh = embedding_gateway.embed([_index_text(c) for c in pending])
+                # m-16b: a short embed result used to zip-drop
+                # capabilities silently, then hits[cap.id] raised
+                # KeyError on every discovery until restart. Fail
+                # loudly instead — the caller reports unavailability.
+                if len(fresh) != len(pending):
+                    raise RuntimeError(
+                        f"embedding gateway returned {len(fresh)} vectors "
+                        f"for {len(pending)} texts"
+                    )
                 if embedding_cache is not None:
                     try:
                         embedding_cache.save(
@@ -130,10 +166,18 @@ def create_tool(deps):
                         )
                     except Exception:  # noqa: BLE001 — cache is best-effort
                         pass
+                    # m-16c: drop rows for models no longer in use
+                    # instead of accumulating them forever.
+                    prune = getattr(embedding_cache, "prune_models", None)
+                    if callable(prune):
+                        try:
+                            prune({model})
+                        except Exception:  # noqa: BLE001 — best-effort
+                            pass
                 for cap, vector in zip(pending, fresh):
                     hits[cap.id] = vector
             cache["vectors"] = [(cap, hits[cap.id]) for cap in capabilities]
-        return cache["vectors"]
+            return cache["vectors"]
 
     @tool
     def discover_capability(need: str) -> str:
@@ -162,14 +206,25 @@ def create_tool(deps):
                 "Data capability lookup is temporarily unavailable: "
                 f"{exc}. Say you cannot look it up."
             )
-        scored = sorted(
-            (
-                (cap, cosine_similarity(query_vector, vector))
-                for cap, vector in index
-            ),
-            key=lambda item: item[1],
-            reverse=True,
-        )
+        try:
+            scored = sorted(
+                (
+                    (cap, cosine_similarity(query_vector, vector))
+                    for cap, vector in index
+                ),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+        except ValueError:
+            # m-16a: the query vector's dimension disagrees with the
+            # index (embedding model changed). Drop the stale index so
+            # the next call re-embeds, and report unavailability now
+            # instead of a wrong ranking.
+            cache.pop("vectors", None)
+            return (
+                "Data capability lookup is temporarily unavailable: "
+                "embedding dimension mismatch. Say you cannot look it up."
+            )
         best, best_score = scored[0]
         if best_score < _SIMILARITY_THRESHOLD:
             return "No data capability matches that need. Say you cannot look it up."
