@@ -74,12 +74,82 @@ capabilities:
     kind: http
     connection: x
     parameters: {}
+    request: {method: GET, path: "/a"}
   - id: dup
     description: "second"
     kind: http
     connection: x
     parameters: {}
+    request: {method: GET, path: "/b"}
 """
     )
     with pytest.raises(CapabilityRepositoryError, match="duplicate capability id"):
         YamlCapabilityRepository(str(path))
+
+
+# --- m-18 / m-15 load-time validation (2026-10-25) ---
+
+def _repo_with_entry(tmp_path, entry_yaml):
+    path = tmp_path / "capabilities.yaml"
+    path.write_text(f"capabilities:\n{entry_yaml}")
+    return path
+
+
+def _load_entry(tmp_path, entry_yaml):
+    return YamlCapabilityRepository(str(_repo_with_entry(tmp_path, entry_yaml)))
+
+
+def test_unknown_kind_rejected_at_load(tmp_path):
+    with pytest.raises(CapabilityRepositoryError, match="unknown kind"):
+        _load_entry(tmp_path, """  - id: x
+    description: "x"
+    kind: snowflke
+    connection: c
+    query: "SELECT 1"
+""")
+
+
+def test_missing_id_and_query_rejected_at_load(tmp_path):
+    with pytest.raises(CapabilityRepositoryError, match="missing required field 'id'"):
+        _load_entry(tmp_path, """  - description: "x"
+    kind: snowflake
+    connection: c
+    query: "SELECT 1"
+""")
+    with pytest.raises(CapabilityRepositoryError, match="requires a 'query'"):
+        _load_entry(tmp_path, """  - id: x
+    description: "x"
+    kind: snowflake
+    connection: c
+""")
+
+
+def test_http_requires_request_path_and_unknown_mode_rejected(tmp_path):
+    with pytest.raises(CapabilityRepositoryError, match="requires 'request.path'"):
+        _load_entry(tmp_path, """  - id: x
+    description: "x"
+    kind: http
+    connection: c
+""")
+    with pytest.raises(CapabilityRepositoryError, match="unknown mode"):
+        _load_entry(tmp_path, """  - id: x
+    description: "x"
+    kind: http
+    connection: c
+    mode: write
+    request: {method: GET, path: "/a"}
+""")
+
+
+def test_unknown_parameter_type_rejected_at_load(tmp_path):
+    with pytest.raises(CapabilityRepositoryError, match="unknown type 'interger'"):
+        _load_entry(tmp_path, """  - id: x
+    description: "x"
+    kind: http
+    connection: c
+    parameters:
+      n:
+        type: interger
+        required: true
+    request: {method: GET, path: "/a"}
+""")

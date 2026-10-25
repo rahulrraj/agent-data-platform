@@ -26,35 +26,71 @@ from strands import tool
 
 from agent_api.ports.capability_executor import CapabilityExecutorError
 
-_TYPE_CHECKS = {
-    "string": str,
-    "integer": int,
-    "number": (int, float),
-    "boolean": bool,
-}
+def _coerce_value(p_type: str, value):
+    """Coerce a model-supplied value to the registry type, or None.
+
+    Safe cases only (m-15): "123" -> 123, "1.5" -> 1.5,
+    "true"/"false" -> bool. A bool is never coerced to integer/number
+    (bool subclasses int, so that check comes first), and nothing is
+    coerced to string — a number where a string is declared is a model
+    error worth one clean retry, not a silent conversion. Unknown
+    registry types can no longer reach here: the registry loader
+    rejects them (m-15), so the fallback below is unreachable in
+    practice and fails closed.
+    """
+    if p_type == "integer":
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            try:
+                return int(value.strip())
+            except ValueError:
+                return None
+        return None
+    if p_type == "number":
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            try:
+                return float(value.strip())
+            except ValueError:
+                return None
+        return None
+    if p_type == "boolean":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+            return value.strip().lower() == "true"
+        return None
+    # string (and any defensive fallback): only a real string passes.
+    return value if isinstance(value, str) else None
 
 
-def _validate(capability, params: dict) -> str | None:
-    """Return an error message, or None when params are valid."""
+def _coerce(capability, params: dict) -> tuple[dict, str | None]:
+    """Validate + coerce params. Returns (coerced, error-or-None)."""
     if not isinstance(params, dict):
-        return "parameters must be a JSON object"
+        return {}, "parameters must be a JSON object"
     known = {p.name for p in capability.parameters}
     unknown = set(params) - known
     if unknown:
-        return f"unknown parameters: {sorted(unknown)}"
+        return {}, f"unknown parameters: {sorted(unknown)}"
+    coerced = {}
     for p in capability.parameters:
         if p.name not in params:
             if p.required:
-                return f"missing required parameter: {p.name}"
+                return {}, f"missing required parameter: {p.name}"
             continue
-        expected = _TYPE_CHECKS.get(p.type, str)
-        value = params[p.name]
-        # bool is a subclass of int — exclude it from integer/number.
-        if isinstance(value, bool) and p.type in ("integer", "number"):
-            return f"parameter '{p.name}' must be {p.type}"
-        if not isinstance(value, expected):
-            return f"parameter '{p.name}' must be {p.type}"
-    return None
+        value = _coerce_value(p.type, params[p.name])
+        if value is None:
+            # No declared type coerces to None, so a None result always
+            # means the value (including a literal None) was invalid.
+            return {}, f"parameter '{p.name}' must be {p.type}"
+        coerced[p.name] = value
+    return coerced, None
 
 
 def create_tool(deps):
@@ -81,14 +117,14 @@ def create_tool(deps):
                 "discover_capability. Use discover_capability first to find "
                 "the right capability, then execute the id it returns."
             )
-        error = _validate(capability, parameters or {})
+        coerced, error = _coerce(capability, parameters or {})
         if error:
             return f"Invalid parameters: {error}"
         executor = executors.get(capability.kind)
         if executor is None:
             return f"No executor configured for kind '{capability.kind}'."
         try:
-            result = executor.execute(capability, parameters)
+            result = executor.execute(capability, coerced)
         except CapabilityExecutorError as exc:
             return f"Capability failed: {exc}"
         return json.dumps(result, default=str)

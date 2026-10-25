@@ -184,3 +184,55 @@ def test_execute_rejects_undiscovered_capability():
     discover("customer tier lookup")
     out = json.loads(execute("customer_by_id", {"customer_id": "C-123"}))
     assert out["rows"][0]["tier"] == "Gold"
+
+
+# --- m-15 parameter coercion (2026-10-25) ---
+
+class _RecordingExecutor:
+    kind = "http"
+
+    def __init__(self):
+        self.seen = None
+
+    def execute(self, capability, params):
+        self.seen = params
+        return {"ok": True}
+
+
+def _execute_with(cap, params):
+    executor = _RecordingExecutor()
+    deps = ToolDeps(
+        capability_registry=FakeRegistry([cap]),
+        capability_executors={"http": executor},
+    )
+    deps.discovered_capability_ids.add(cap.id)
+    tool = create_execute(deps)
+    out = tool(capability_id=cap.id, parameters=params)
+    return out, executor
+
+
+def test_coerces_string_int_bool_and_number():
+    cap = Capability(
+        id="c", description="c", kind="http", connection="x", mode="read",
+        parameters=(
+            ParameterSpec(name="n", type="integer", required=True),
+            ParameterSpec(name="flag", type="boolean", required=True),
+            ParameterSpec(name="amt", type="number", required=True),
+        ),
+        spec={},
+    )
+    out, executor = _execute_with(cap, {"n": "42", "flag": "true", "amt": "1.5"})
+    assert json.loads(out) == {"ok": True}
+    assert executor.seen == {"n": 42, "flag": True, "amt": 1.5}
+
+
+def test_failed_coercion_and_bool_as_int_rejected():
+    cap = Capability(
+        id="c", description="c", kind="http", connection="x", mode="read",
+        parameters=(ParameterSpec(name="n", type="integer", required=True),),
+        spec={},
+    )
+    out, _ = _execute_with(cap, {"n": "not-a-number"})
+    assert "must be integer" in out
+    out, _ = _execute_with(cap, {"n": True})
+    assert "must be integer" in out
