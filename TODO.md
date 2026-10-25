@@ -59,10 +59,13 @@ can move.
   to new invocations); blue-green/canary on Lambda map to aliases with
   weighted routing; EKS canary needs an ingress/mesh mechanism (e.g. Argo
   Rollouts/Flagger). Also noted in `deploy/terraform/README.md`.
-- **Push and merge** — commits `9324694` (Bedrock), `6a8e612` (Lambda),
-  `1785b50` (TODO doc), and `0ad2e20` (Terraform + pipeline) are
-  local-only on `feature/initial-platform`. Push when Rahul asks; merging
-  the branch is his later call.
+- **Push and merge** — remote `feature/initial-platform` is at `1785b50`
+  (Bedrock, Lambda, TODO doc). Local-only (blocked on the PAT's missing
+  Workflows permission — see Deployment section): `0ad2e20` (Terraform +
+  pipeline), `bb39cb5` (TODO update), `55b2bdb` (A2A TODO), `1b32376` (UI
+  review fixes), `eaf2298` (infra review fixes), `242c0e7` + `ec86bff`
+  (backend review fixes), plus this TODO's own status updates. Merging
+  the branch is Rahul's later call.
 
 ## Capabilities and guardrails
 
