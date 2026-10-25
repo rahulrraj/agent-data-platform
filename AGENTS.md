@@ -44,6 +44,7 @@ controllers/ -> services/ -> ports/        (adapters implement ports)
 - `src/ui/` — React chat frontend (Vite). Talks to the API over HTTP/SSE only;
   never imports backend code. See `src/ui/README.md`.
 - `registry/` — data capability registry YAML (see doc/data-capabilities.md).
+- `capability_import/` — offline tooling that drafts registry YAML from specs; not part of the runtime path (see doc/data-capabilities.md).
 
 Create only the folders the project needs (`workflows/`, `mappers/` were
 deliberately skipped). `platform/` holds retry primitives. Record deliberate

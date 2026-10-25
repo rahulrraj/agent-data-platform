@@ -134,7 +134,7 @@ flowchart TB
     TL["<b>tools/</b> — plugins<br/>one folder per tool;<br/>bare functions or create_tool(deps)"]
     AD["<b>adapters/</b> — implement ports<br/>gateways · repositories · executors<br/>all SDKs live here"]
     PL["<b>platform/</b> — shared technical capabilities<br/>retry with backoff + jitter"]
-    MN(["<b>main.py</b> — composition root<br/>ONLY place that reads config<br/>ONLY place that picks adapters"])
+    MN(["<b>composition.py</b> — composition root<br/>ONLY place that reads config<br/>ONLY place that picks adapters"])
 
     CT --> SV --> PT
     TL --> PT
@@ -153,7 +153,7 @@ environment.
 
 ## Switching framework and model
 
-`main.py` resolves the framework × provider matrix. The service only ever
+`composition.py` resolves the framework × provider matrix. The service only ever
 sees a `ModelGateway`.
 
 |                      | `ollama` (local)      | `gemini` (free tier)   | `bedrock` (AWS)        |
@@ -177,7 +177,7 @@ on the provider path either way.
   reachable, store readable) for load balancers.
 - Gateways are stateless per call; history durability comes from the store
   adapter (`memory` default, `sqlite` for restart-proof single host,
-  Postgres planned for multi-instance).
+  Postgres built for multi-instance).
 
 ## Run it
 
@@ -321,7 +321,8 @@ Errors: invalid input → 400; model/data failure → 502 with a clean message.
 
 ```text
 src/agent_api/
-  main.py                 composition root: reads config, wires everything, starts
+  composition.py          composition root: reads config, wires everything
+  main.py                 thin CLI entrypoint over composition.build_app()
   config/settings.py      load/parse/validate settings (env vars)
   controllers/http.py     inbound HTTP adapter: routes, validation, error mapping
   services/ask_agent.py   the "ask the agent" use case (depends only on ports)
@@ -361,7 +362,7 @@ doc/
 
 ## Principles in one line each
 
-- **Hexagonal**: core knows nothing outbound; adapters implement ports; `main.py` wires everything.
+- **Hexagonal**: core knows nothing outbound; adapters implement ports; `composition.py` wires everything.
 - **Model-agnostic**: every model call goes through `ModelGateway`; provider switch is one env var.
 - **Framework-agnostic**: Strands and LangGraph both implement `ModelGateway`; tools are defined once.
 - **Data by configuration**: new dataset = one YAML entry + one named connection. No code.
