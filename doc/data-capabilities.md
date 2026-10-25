@@ -11,8 +11,10 @@ without hardcoded per-entity tools. See ADR 0002 for the decision record.
 - **Registry** — the YAML file. It is version-controlled configuration:
   adding an entry is a repo edit + review + deploy, never a runtime action.
 - **discover_capability** — tool. Semantic search ("customer tier lookup")
-  over capability descriptions; returns the single best-matching capability
-  with its parameter schema.
+  over capability descriptions (plus parameter descriptions); returns the
+  single best-matching capability with its parameter schema and score —
+  or the top two with scores when they are within the margin (δ = 0.05),
+  so a near-tie is the model's choice, not a forced guess.
 - **execute_capability** — tool. Validates parameters, dispatches to the
   executor for the capability's kind, returns JSON.
 
@@ -52,7 +54,15 @@ Kind-specific `spec` keys:
 | http      | `request` | `method`, `path` (`{name}` from params), optional `fields` allowlist |
 
 HTTP semantics: `GET` puts params not used in the path on the query string;
-`POST` sends params as the JSON body. `fields` trims dict responses.
+`POST` sends params as the JSON body. `fields` trims dict responses and
+dict items inside list responses; list results are capped at 50 with a
+`truncated` flag, mirroring the SQL row cap. A 204/empty body yields
+`{"data": null}` and a non-JSON 200 body is returned as text, not a crash.
+Path parameter values are percent-encoded, and a `/` in a value is refused
+unless the capability opts that parameter into `multi_segment_params`.
+Connection targets are validated at executor construction: `base_url`
+must be https and must not be a loopback/private/reserved host unless the
+connection opts in with `allow_private_base_url` (local dev only).
 
 ## Connections
 
@@ -82,7 +92,8 @@ Snowflake accepts `private_key` (preferred) or `password`. SQL Server accepts
 
 1. User: "What tier is customer C-123?"
 2. Model → `discover_capability("customer tier lookup")` →
-   `[{"id": "customer_by_id", "parameters": {"customer_id": {...}}}]`
+   `{"id": "customer_by_id", "score": 0.87, "parameters": {"customer_id": {...}}}`
+   (a single object per ADR 0004, not a list)
 3. Model → `execute_capability("customer_by_id", {"customer_id": "C-123"})` →
    `{"rows": [{"name": "...", "tier": "Gold"}], "truncated": false}`
 4. Model answers.
@@ -103,6 +114,21 @@ registry by hand. The registry stays reviewed code — the generator never
 edits it. Snowflake-table import will plug into the same module later
 (`--from snowflake`).
 
+Placement (m-3): `capability_import` is offline registry tooling, not a
+runtime layer. It converts a spec into draft YAML and touches no port or
+adapter; it never edits the live registry. That is why it sits outside
+the controllers → services → ports layering: the placement test applies
+to runtime code, and this code never runs in the app.
+
+The generator loop, end to end: generate → review (required, as above)
+→ `--validate` (round-trips the draft through the registry loader and
+reports id collisions against the live registry) → merge → test. `fields`
+are filled from a declared 200-response object schema when one exists.
+Descriptions containing instruction-like phrasing from the spec are
+flagged as warnings — spec text reaches the model verbatim through
+discovery, so such a description must be rewritten before merging, never
+merged as-is.
+
 ## What the model sees
 
 Concise and complete — nothing more, nothing less. The model gets: the
@@ -117,21 +143,27 @@ prompt, the model should ask, not guess.
 ## Embedding cache
 
 At thousands of capabilities, re-embedding every description on each
-restart is a slow cold start and real API cost. Description vectors are
-cached in SQLite (`EMBEDDING_CACHE_PATH`, default `embedding_cache.db`),
-keyed by capability id + embedding model, with a sha256 of the
-description text. Only new or edited descriptions are re-embedded;
-switching embedding models invalidates everything (vectors from different
-models aren't comparable). The cache is best-effort: if it's missing or
-broken, discovery falls back to embedding everything in memory, and a
-failed embedding backend still reports "temporarily unavailable" instead
+restart is a slow cold start and real API cost. Indexed texts (description
++ parameter descriptions) are embedded lazily on first discovery — never
+at startup, so a down embedding backend cannot block boot — and cached
+in SQLite (`EMBEDDING_CACHE_PATH`, default `embedding_cache.db`), keyed
+by capability id + embedding model, with a sha256 of the indexed text.
+Only new or edited texts are re-embedded; switching embedding models
+invalidates everything (vectors from different models aren't comparable).
+Each row records its vector dimension, and discovery re-embeds rather
+than ranking when cached dimensions disagree or a row's recorded
+dimension disagrees with its vector; rows for models no longer in use
+are pruned. The cache is best-effort: if it's missing or broken,
+discovery falls back to embedding everything in memory, and a failed
+embedding backend still reports "temporarily unavailable" instead
 of guessing.
 
 ## Prerequisites
 
 - The embedding model must exist in the provider: `nomic-embed-text` in
   Ollama (`OLLAMA_EMBED_MODEL` overrides), or the Gemini embedding model
-  for the `gemini` provider. Descriptions are embedded once at startup.
+  for the `gemini` provider. Indexed texts are embedded lazily on first
+  use and cached, as above.
 
 If nothing matches (below the similarity threshold), discovery says so
 instead of guessing. If parameters are missing/wrong-typed/unknown,
@@ -141,10 +173,13 @@ execution returns a clean error message — never a traceback.
 
 - **No raw SQL / no raw URLs from the model.** Ever. Queries and paths are
   fixed in the registry; the model fills values.
-- **Read-only.** `mode: read` is enforced by every executor.
+- **Read-only.** `mode: read` is enforced by every executor (SQL
+  statements must start with SELECT/WITH; HTTP read capabilities are
+  GET-only).
 - **Minimal fields.** Select only what the answer needs — results enter the
   model's context window.
-- **Row caps.** SQL executors return at most 50 rows and flag `truncated`.
+- **Row caps.** SQL executors return at most 50 rows and flag `truncated`;
+  HTTP list results get the same cap and flag.
 - **Retries.** Executors retry transient failures (connection drops,
   429/5xx) with backoff; bad SQL / 4xx fail fast.
 - **Least-privilege credentials.** Service accounts should be read-only and

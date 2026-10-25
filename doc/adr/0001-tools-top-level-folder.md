@@ -24,3 +24,11 @@ categories.
 
 **Consequences:** one more top-level folder than the default structure;
 placement documented here instead of silently diverging.
+
+**Amendment (2026-10-25, code review m-48):** the original "tools/
+imports nothing from the app" sentence is stale. Bare tool functions
+still import nothing, but factory plugins (`create_tool(deps)`) import
+`domain.capability` and the port types they receive via `ToolDeps` —
+the sanctioned §4 pattern for tools that need outbound I/O through a
+core-owned port. The direction that matters is unchanged: tools never
+import adapters, services, or controllers.

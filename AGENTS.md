@@ -85,6 +85,7 @@ SKILL.md directly when the task matches:
   `execute_capability` serve them (doc/data-capabilities.md, ADR 0002).
 - Tool functions stay pure and dependency-free; the one-line docstring is what
   the model reads to decide when to call the tool — make it specific.
+- `tools/get_current_time` is the one exception to pure tool functions: it reads the clock (`datetime.now()`) because reporting the current time is its entire job.
 - New model providers: new adapter implementing `ModelGateway`, wired in
   `main.build_gateway()`. Never branch on provider outside `main`.
 - New agent frameworks: new `*GatewayBase` holding the loop/stream/retry

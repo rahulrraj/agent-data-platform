@@ -18,8 +18,8 @@ honest: ✅ enforced in code · 🟡 partial/documented · ❌ planned, not buil
 | Tools are version-controlled code | ✅ | New tools need approval (`doc/approvals.md`) |
 | Data only via capability registry | ✅ | Model supplies parameter *values*; queries/URLs are fixed in YAML |
 | `mode: read` enforced | ✅ | Executors refuse anything else |
-| Parameter validation | ✅ | Required, types, unknown params rejected — clean errors, never tracebacks |
-| 50-row cap + `truncated` flag | ✅ | Per execution |
+| Parameter validation | ✅ | Required, types, unknown params rejected — clean errors, never tracebacks; safe string values coerced (`"123"` → `123`, `"true"` → `true`) |
+| 50-row cap + `truncated` flag | ✅ | Per execution, for SQL rows and HTTP list results |
 | Minimal columns | ✅ | Registry declares only needed fields |
 | Secrets out of the repo | ✅ | Connections live in `DATA_CONNECTIONS` (env JSON), never in YAML |
 | Per-user authorization | 🟡 | Documented: the agent acts with the service's permissions; per-user scoping (`allowed_roles`) is planned |
@@ -29,7 +29,7 @@ honest: ✅ enforced in code · 🟡 partial/documented · ❌ planned, not buil
 
 | Guardrail | Status | Notes |
 | --- | --- | --- |
-| Provider allowlist | ✅ | `ollama` / `gemini` only, validated in settings |
+| Provider allowlist | ✅ | `ollama` / `gemini` / `bedrock`, validated in settings |
 | Framework allowlist | ✅ | `strands` / `langgraph` only |
 | Output filtering (PII, secrets) | ❌ | Nothing filters model output today |
 | Token / cost budgets | ❌ | Matters once Gemini (metered) is the provider |
@@ -49,7 +49,7 @@ honest: ✅ enforced in code · 🟡 partial/documented · ❌ planned, not buil
 
 | Guardrail | Status | Notes |
 | --- | --- | --- |
-| Tests per layer (arch doc §9) | ✅ | 59 backend + 16 UI tests, all green |
+| Tests per layer (arch doc §9) | ✅ | 216 backend tests green, 4 skipped (2026-10-25; update this row in the same commit as any suite change) |
 | ADRs for architectural decisions | ✅ | `doc/adr/` |
 | Approvals for gated changes | ✅ | `doc/approvals.md` |
 | No invented scope/content | ✅ | Build what was asked; proposals before commits |
