@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import AsyncIterator
 
 from langchain.agents import create_agent
@@ -28,6 +29,8 @@ from langchain_core.tools import StructuredTool
 from agent_api.domain.conversation import ASSISTANT, USER, Conversation, ToolResult, Turn
 from agent_api.platform.retry import RetryPolicy, backoff_delay, call_with_retry
 from agent_api.ports.model_gateway import ModelGateway, ModelGatewayError, StreamChunk
+
+logger = logging.getLogger(__name__)
 
 
 def to_langchain_tool(strands_tool) -> StructuredTool:
@@ -88,6 +91,12 @@ class LangGraphGatewayBase(ModelGateway):
     # -- shared mechanics ---------------------------------------------------
 
     def _build_agent(self):
+        # m-9: no executor pin exists to set here — create_agent()
+        # exposes no tool-executor parameter in this LangChain version.
+        # Its ToolNode executes the tool calls of a single model
+        # response concurrently (asyncio.gather), and successive loop
+        # iterations are sequential, matching the Strands pin's
+        # semantics; dependent calls must still span iterations.
         return create_agent(
             self._build_chat_model(),
             self._lc_tools,
@@ -174,6 +183,12 @@ class LangGraphGatewayBase(ModelGateway):
             tool_results=tuple(cls._tool_results(messages)),
         )
 
+    def _transient_flag(self, exc: Exception) -> bool:
+        try:
+            return self._is_transient(exc)
+        except Exception:  # noqa: BLE001 — classification must not mask the failure
+            return False
+
     def generate(self, conversation: Conversation) -> Turn:
         try:
             return call_with_retry(
@@ -182,6 +197,14 @@ class LangGraphGatewayBase(ModelGateway):
                 is_transient=self._is_transient,
             )
         except Exception as exc:  # noqa: BLE001
+            # m-19: log the original type + transient classification
+            # distinctly (see StrandsGatewayBase.generate); the caller
+            # still sees ModelGatewayError.
+            logger.warning(
+                "%s call failed: %s (transient=%s): %s",
+                self._provider_name(), type(exc).__name__,
+                self._transient_flag(exc), exc,
+            )
             raise ModelGatewayError(
                 f"{self._provider_name()} call failed: {exc}"
             ) from exc
@@ -211,6 +234,11 @@ class LangGraphGatewayBase(ModelGateway):
                     or attempt + 1 >= self._retry.max_attempts
                     or not self._is_transient(exc)
                 ):
+                    logger.warning(
+                        "%s stream failed: %s (transient=%s): %s",
+                        self._provider_name(), type(exc).__name__,
+                        self._transient_flag(exc), exc,
+                    )
                     raise ModelGatewayError(
                         f"{self._provider_name()} stream failed: {exc}"
                     ) from exc

@@ -38,6 +38,9 @@ class LangGraphGeminiGateway(LangGraphGatewayBase):
             model=self._model_id,
             api_key=self._api_key,
             temperature=0,
+            # m-10: bound the outbound call like Ollama's 120s
+            # (LangChain converts this seconds value to ms for genai).
+            timeout=120,
         )
 
     def _is_transient(self, exc: Exception) -> bool:

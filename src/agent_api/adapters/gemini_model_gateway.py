@@ -35,7 +35,12 @@ class GeminiModelGateway(StrandsGatewayBase):
 
         return GeminiModel(
             model_id=self._model_id,
-            client_args={"api_key": self._api_key},
+            # m-10: bound the outbound call like Ollama's 120s. The
+            # google-genai HttpOptions timeout is in milliseconds.
+            client_args={
+                "api_key": self._api_key,
+                "http_options": {"timeout": 120_000},
+            },
         )
 
     def _is_transient(self, exc: Exception) -> bool:

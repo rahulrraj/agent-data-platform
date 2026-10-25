@@ -110,3 +110,16 @@ def test_langgraph_final_turn_reads_tool_results():
     assert turn.tool_results == (
         ToolResult(tool="execute_capability", result='{"tier": "Gold"}'),
     )
+
+
+# --- m-9 / m-10 gateway pinning (2026-10-25) ---
+
+def test_strands_pins_concurrent_tool_executor(monkeypatch):
+    from strands.tools.executors.concurrent import ConcurrentToolExecutor
+
+    monkeypatch.setattr(
+        "agent_api.adapters.strands_base.Agent", _CapturingAgent
+    )
+    probe = _StrandsProbe(tools=[], system_prompt="s", retry_policy=RetryPolicy())
+    agent = probe._build_agent(_conv_with_results())
+    assert isinstance(agent.kwargs["tool_executor"], ConcurrentToolExecutor)

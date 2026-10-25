@@ -66,10 +66,10 @@ def test_build_model_passes_region_and_model(monkeypatch):
 
     monkeypatch.setattr("strands.models.BedrockModel", CapturingBedrockModel)
     _gateway()._build_model()
-    assert seen == {
-        "region_name": "us-east-1",
-        "model_id": "us.anthropic.claude-sonnet-5-5",
-    }
+    assert seen["region_name"] == "us-east-1"
+    assert seen["model_id"] == "us.anthropic.claude-sonnet-5-5"
+    # m-10: read timeout pinned alongside region/model.
+    assert seen["boto_client_config"].read_timeout == 120
 
 
 def test_generate_happy_path(monkeypatch):
@@ -146,3 +146,23 @@ def test_ping_requires_credentials(monkeypatch):
         gateway.ping()
     monkeypatch.setattr("boto3.Session", lambda **kw: FakeSession(object()))
     gateway.ping()  # no raise
+
+
+# --- m-10 timeout pin (2026-10-25) ---
+
+def test_bedrock_read_timeout_pinned(monkeypatch):
+    captured = {}
+
+    class _FakeBedrockModel:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("strands.models.BedrockModel", _FakeBedrockModel)
+    from agent_api.adapters.bedrock_model_gateway import BedrockModelGateway
+
+    gateway = BedrockModelGateway(
+        region_name="us-east-1", model_id="m", tools=[], system_prompt="s",
+        retry_policy=RetryPolicy(),
+    )
+    gateway._build_model()
+    assert captured["boto_client_config"].read_timeout == 120

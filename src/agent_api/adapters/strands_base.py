@@ -14,9 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import AsyncIterator
 
 from strands import Agent
+from strands.tools.executors.concurrent import ConcurrentToolExecutor
+
+logger = logging.getLogger(__name__)
 
 from agent_api.domain.conversation import ASSISTANT, Conversation, ToolResult, Turn
 from agent_api.platform.retry import RetryPolicy, backoff_delay, call_with_retry
@@ -106,6 +110,14 @@ class StrandsGatewayBase(ModelGateway):
             messages=messages,
             system_prompt=self._system_prompt,
             tools=self._tools,
+            # m-9: pin the executor explicitly instead of relying on the
+            # SDK default (which happens to also be concurrent). Tools
+            # emitted in a single model response run concurrently;
+            # successive loop iterations are inherently sequential, so
+            # a dependent call (execute after discover) must span loop
+            # iterations — the discover/execute provenance set enforces
+            # that ordering on top of this.
+            tool_executor=ConcurrentToolExecutor(),
             # Explicit None -> null handler. The default would print every
             # streamed token to the server's stdout.
             callback_handler=None,
@@ -176,6 +188,12 @@ class StrandsGatewayBase(ModelGateway):
             tool_results=tuple(self._tool_results(agent, seeded)),
         )
 
+    def _transient_flag(self, exc: Exception) -> bool:
+        try:
+            return self._is_transient(exc)
+        except Exception:  # noqa: BLE001 — classification must not mask the failure
+            return False
+
     def generate(self, conversation: Conversation) -> Turn:
         try:
             return call_with_retry(
@@ -184,6 +202,19 @@ class StrandsGatewayBase(ModelGateway):
                 is_transient=self._is_transient,
             )
         except Exception as exc:  # noqa: BLE001
+            # m-19: a broad except used to convert programming errors
+            # (tool-translation bugs, prompt bugs) into provider 502s
+            # indistinguishable from real outages. The contract is
+            # kept (callers still see ModelGatewayError), but the
+            # original exception type and its transient classification
+            # are logged distinctly so a 502 can be triaged: a
+            # provider SDK type points at the provider, anything else
+            # points at this codebase.
+            logger.warning(
+                "%s call failed: %s (transient=%s): %s",
+                self._provider_name(), type(exc).__name__,
+                self._transient_flag(exc), exc,
+            )
             raise ModelGatewayError(
                 f"{self._provider_name()} call failed: {exc}"
             ) from exc
@@ -229,6 +260,11 @@ class StrandsGatewayBase(ModelGateway):
                     or attempt + 1 >= self._retry.max_attempts
                     or not self._is_transient(exc)
                 ):
+                    logger.warning(
+                        "%s stream failed: %s (transient=%s): %s",
+                        self._provider_name(), type(exc).__name__,
+                        self._transient_flag(exc), exc,
+                    )
                     raise ModelGatewayError(
                         f"{self._provider_name()} stream failed: {exc}"
                     ) from exc

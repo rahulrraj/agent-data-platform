@@ -128,3 +128,45 @@ def test_strands_generate_happy_path():
     turn = gateway.generate(_conv())
     assert turn.content == "42"
     assert turn.tool_uses == ("calculate",)
+
+
+# --- m-10 timeout pins (2026-10-25) ---
+
+def test_gemini_model_timeout_pinned(monkeypatch):
+    captured = {}
+
+    class _FakeGeminiModel:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "strands.models.gemini.GeminiModel", _FakeGeminiModel
+    )
+    from agent_api.adapters.gemini_model_gateway import GeminiModelGateway
+
+    gateway = GeminiModelGateway(
+        api_key="k", model_id="m", tools=[], system_prompt="s",
+        retry_policy=RetryPolicy(),
+    )
+    gateway._build_model()
+    assert captured["client_args"]["http_options"] == {"timeout": 120_000}
+
+
+def test_langgraph_gemini_timeout_pinned(monkeypatch):
+    captured = {}
+
+    class _FakeChatModel:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "langchain_google_genai.ChatGoogleGenerativeAI", _FakeChatModel
+    )
+    from agent_api.adapters.langgraph_gemini_gateway import LangGraphGeminiGateway
+
+    gateway = LangGraphGeminiGateway(
+        api_key="k", model_id="m", tools=[], system_prompt="s",
+        retry_policy=RetryPolicy(),
+    )
+    gateway._build_chat_model()
+    assert captured["timeout"] == 120

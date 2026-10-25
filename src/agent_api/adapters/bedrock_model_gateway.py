@@ -45,10 +45,15 @@ class BedrockModelGateway(StrandsGatewayBase):
     def _build_model(self):
         # Local import: only this adapter needs the Bedrock provider package.
         from strands.models import BedrockModel
+        from botocore.config import Config as BotocoreConfig
 
+        # m-10: pin the read timeout explicitly (120s, matching
+        # Ollama) instead of relying on Strands' DEFAULT_READ_TIMEOUT,
+        # which happens to also be 120 today.
         return BedrockModel(
             region_name=self._region_name,
             model_id=self._model_id,
+            boto_client_config=BotocoreConfig(read_timeout=120),
         )
 
     def _is_transient(self, exc: Exception) -> bool:
