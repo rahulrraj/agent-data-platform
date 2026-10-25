@@ -25,6 +25,18 @@ _TYPE_MAP = {
     "boolean": "boolean",
 }
 
+# m-6: spec text reaches the model verbatim through discovery results,
+# so instruction-like phrasing in a third-party spec is a prompt
+# injection vector with human review as the only control. These
+# patterns are a cheap automated tripwire, not a verdict: a match adds
+# a warning (reviewers must rewrite the description before merging),
+# it never drops the capability silently.
+_INSTRUCTION_PATTERNS = (
+    re.compile(r"\b(ignore|disregard|override)\b.{0,40}\b(previous|prior|system)\b.{0,20}\binstructions?\b", re.I),
+    re.compile(r"\breveal\b.{0,30}\b(system prompt|instructions?)\b", re.I),
+    re.compile(r"\bdo not follow\b.{0,40}\b(instructions?|system)\b", re.I),
+)
+
 
 def _resolve_ref(ref: str, spec: dict):
     if not ref.startswith("#/"):
@@ -95,6 +107,33 @@ def _base_url(spec: dict):
     return None
 
 
+def _response_fields(op: dict, spec: dict) -> list | None:
+    """Property names of the 200-response object schema, if declared.
+
+    Handles both a bare object schema and an array-of-objects schema.
+    Returns None when no usable schema exists (fields stay unset and
+    the reviewer adds them by hand, as before).
+    """
+    responses = op.get("responses") or {}
+    response = responses.get("200") or responses.get(200) or {}
+    response = _deref(response, spec) if isinstance(response, dict) else {}
+    content = response.get("content") or {}
+    for media in content.values():
+        if not isinstance(media, dict):
+            continue
+        schema = _deref(media.get("schema") or {}, spec)
+        if not isinstance(schema, dict):
+            continue
+        if schema.get("type") == "array":
+            items = _deref(schema.get("items") or {}, spec)
+            props = items.get("properties") if isinstance(items, dict) else None
+        else:
+            props = schema.get("properties")
+        if isinstance(props, dict) and props:
+            return list(props.keys())
+    return None
+
+
 def capabilities_from_spec(spec: dict, connection: str):
     """Return (entries, report) for the GET operations in an OpenAPI/Swagger doc."""
     entries: list = []
@@ -134,6 +173,27 @@ def capabilities_from_spec(spec: dict, connection: str):
                     f"{capability_id}: no summary/description in spec — "
                     "description generated, rewrite it as a user need before merging"
                 )
+            # m-6: flag instruction-like phrasing anywhere in the text
+            # that will reach the model (summary, description, param
+            # descriptions). Warning only — review decides.
+            spec_text = " ".join(
+                [op.get("summary") or "", op.get("description") or ""]
+                + [p["description"] for p in params.values()]
+            )
+            if any(p.search(spec_text) for p in _INSTRUCTION_PATTERNS):
+                report["warnings"].append(
+                    f"{capability_id}: description contains "
+                    "instruction-like phrasing from the spec — rewrite "
+                    "it as a user need before merging; spec text "
+                    "reaches the model verbatim via discovery"
+                )
+            # m-12: generate `fields` from the 200-response schema when
+            # one exists, so responses are trimmed before entering
+            # model context instead of arriving untrimmed by default.
+            fields = _response_fields(op, spec)
+            request: dict = {"method": "GET", "path": path}
+            if fields:
+                request["fields"] = fields
             entries.append(
                 {
                     "id": capability_id,
@@ -149,7 +209,7 @@ def capabilities_from_spec(spec: dict, connection: str):
                         }
                         for p in params.values()
                     },
-                    "request": {"method": "GET", "path": path},
+                    "request": request,
                 }
             )
 

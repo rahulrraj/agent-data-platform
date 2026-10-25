@@ -178,7 +178,14 @@ class AskAgentService:
                     ):
                         if chunk.kind == "text":
                             texts.append(chunk.payload)
-                        elif chunk.kind == "tool" and chunk.payload not in tools:
+                        elif chunk.kind == "tool":
+                            # Nit: tool chunks used to be yielded on
+                            # every occurrence while saved history
+                            # deduped by name — raw SSE consumers saw
+                            # repeats the UI hid. Yield each tool name
+                            # once, matching the saved-history dedup.
+                            if chunk.payload in tools:
+                                continue
                             tools.append(chunk.payload)
                         elif chunk.kind == "tool_result":
                             try:

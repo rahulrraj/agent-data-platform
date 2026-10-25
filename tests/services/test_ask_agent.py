@@ -391,3 +391,25 @@ def test_stream_tool_result_chunks_persisted():
     assert conv.turns[-1].tool_results == (
         ToolResult(tool="execute_capability", result='{"tier": "Gold"}'),
     )
+
+
+async def _collect(service, session_id="s1", message="hi"):
+    return [c async for c in service.ask_stream(session_id, message)]
+
+
+def test_stream_tool_chunks_deduped_by_name():
+    # Nit: a gateway that reports the same tool twice in one turn
+    # used to stream the tool chunk twice (saved history deduped).
+    class _RepeatingGateway(FakeGateway):
+        async def stream(self, conversation):
+            yield StreamChunk(kind="text", payload="hi")
+            yield StreamChunk(kind="tool", payload="calculate")
+            yield StreamChunk(kind="tool", payload="calculate")
+            yield StreamChunk(kind="tool", payload="word_count")
+
+    import asyncio
+
+    service, _, _ = make_service(gateway=_RepeatingGateway())
+    chunks = asyncio.run(_collect(service))
+    tool_chunks = [c.payload for c in chunks if c.kind == "tool"]
+    assert tool_chunks == ["calculate", "word_count"]
