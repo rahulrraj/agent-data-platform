@@ -1,6 +1,11 @@
 # Lambda container image variant of Dockerfile.
 # Same app, plus the Lambda runtime interface client; the handler is the
-# entrypoint. Build with: docker build -f Dockerfile.lambda -t agent-api-lambda .
+# entrypoint. Build with: docker build --platform linux/amd64 -f Dockerfile.lambda -t agent-api-lambda .
+# --platform matters: the Lambda function is x86_64, and a plain build on
+# an arm64 host would produce an image that fails on the function.
+# This image deliberately stays root (m-27): the Lambda runtime
+# interface client runs as root by design, unlike the EKS images, which
+# run as non-root users.
 FROM python:3.12-slim
 
 WORKDIR /app

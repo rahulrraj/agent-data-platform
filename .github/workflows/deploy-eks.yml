@@ -56,6 +56,14 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      # m-21: see deploy-lambda.yml — deploy jobs install Terraform
+      # themselves instead of relying on the runner image. Same pinned
+      # version in plan and apply (plan artifacts are version-sensitive).
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: "1.9.0"
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
@@ -91,10 +99,27 @@ jobs:
         run: |
           API_IMAGE="${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-eks-api:$IMAGE_TAG"
           UI_IMAGE="${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-eks-ui:$IMAGE_TAG"
-          docker build -t "$API_IMAGE" .
-          docker push "$API_IMAGE"
-          docker build -f src/ui/Dockerfile -t "$UI_IMAGE" .
-          docker push "$UI_IMAGE"
+          # The repos are IMMUTABLE, so a re-run for the same commit
+          # cannot re-push the same tag — skip each image whose tag is
+          # already there instead of failing the re-run.
+          if aws ecr describe-images \
+              --repository-name "${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-eks-api" \
+              --image-ids "imageTag=$IMAGE_TAG" \
+              --region "${{ env.AWS_REGION }}" >/dev/null 2>&1; then
+            echo "API image $IMAGE_TAG already exists (workflow re-run) — skipping."
+          else
+            docker build -t "$API_IMAGE" .
+            docker push "$API_IMAGE"
+          fi
+          if aws ecr describe-images \
+              --repository-name "${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-eks-ui" \
+              --image-ids "imageTag=$IMAGE_TAG" \
+              --region "${{ env.AWS_REGION }}" >/dev/null 2>&1; then
+            echo "UI image $IMAGE_TAG already exists (workflow re-run) — skipping."
+          else
+            docker build -f src/ui/Dockerfile -t "$UI_IMAGE" .
+            docker push "$UI_IMAGE"
+          fi
 
       - name: Terraform plan (EKS stack)
         working-directory: deploy/terraform/stacks/aws-eks
@@ -136,13 +161,26 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      # Same pinned Terraform as the plan job (m-21).
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: "1.9.0"
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # m-26: kubectl was unpinned (whatever setup-kubectl defaults to).
+      # Pin it to the cluster minor: the EKS stack's cluster_version
+      # default is 1.36, and kubectl skew policy wants the client
+      # within one minor of the server. Bump this together with
+      # cluster_version in deploy/terraform/stacks/aws-eks/variables.tf.
       - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
+        with:
+          version: "v1.36.0"
 
       - name: Download plan artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -177,27 +215,42 @@ jobs:
           UI_IMAGE="$REGISTRY/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-eks-ui:${{ github.sha }}"
           DSN=$(terraform output -raw rds_dsn)
           echo "::add-mask::$DSN"
+          # m-31: mask the other secrets this step handles, not just
+          # the computed DSN — a verbose kubectl failure could otherwise
+          # print them. (GitHub auto-masks registered secrets verbatim,
+          # but these values are also composed/echoed here.)
+          if [ -n "$TF_VAR_gemini_api_key" ]; then echo "::add-mask::$TF_VAR_gemini_api_key"; fi
+          if [ -n "${TF_VAR_data_connections:-}" ]; then echo "::add-mask::${TF_VAR_data_connections:-}"; fi
           # Temp copies only — the committed manifests keep placeholders.
           rm -rf /tmp/k8s-deploy && cp -r "$GITHUB_WORKSPACE/deploy/k8s" /tmp/k8s-deploy
           sed -i "s|agent-data-platform:latest|$API_IMAGE|" /tmp/k8s-deploy/api-deployment.yaml
           sed -i "s|agent-ui:latest|$UI_IMAGE|" /tmp/k8s-deploy/ui-deployment.yaml
           sed -i "s|AGENT_MODEL_PROVIDER: \"ollama\"|AGENT_MODEL_PROVIDER: \"$MODEL_PROVIDER\"|" /tmp/k8s-deploy/configmap.yaml
+          sed -i "s|^  AWS_REGION: .*|  AWS_REGION: \"${{ env.AWS_REGION }}\"|" /tmp/k8s-deploy/configmap.yaml
           sed -i "s|host: agent-platform.example.com|host: $INGRESS_HOST|" /tmp/k8s-deploy/ingress.yaml
-          # The in-cluster Postgres StatefulSet is NOT applied: RDS (from
-          # Terraform) is the conversation store. The placeholder Secret
-          # is NOT applied either: the real Secret is created below.
-          kubectl apply -f /tmp/k8s-deploy/namespace.yaml \
-                        -f /tmp/k8s-deploy/configmap.yaml \
-                        -f /tmp/k8s-deploy/api-deployment.yaml \
-                        -f /tmp/k8s-deploy/ui-deployment.yaml \
-                        -f /tmp/k8s-deploy/ingress.yaml
+          # m-25: the Secret is created BEFORE the Deployments. Pods
+          # reference it via secretKeyRef, so applying Deployments
+          # first left them in CreateContainerConfigError until the
+          # Secret appeared seconds later.
+          kubectl apply -f /tmp/k8s-deploy/namespace.yaml
           kubectl -n agent-platform create secret generic agent-platform-secrets \
             --from-literal=POSTGRES_DSN="$DSN" \
             --from-literal=DATA_CONNECTIONS="${TF_VAR_data_connections:-{}}" \
             --from-literal=GEMINI_API_KEY="${TF_VAR_gemini_api_key:-}" \
             --dry-run=client -o yaml | kubectl apply -f -
-          kubectl -n agent-platform rollout status deployment/agent-api
-          kubectl -n agent-platform rollout status deployment/agent-ui
+          # The in-cluster Postgres StatefulSet is NOT applied: RDS (from
+          # Terraform) is the conversation store. The placeholder Secret
+          # template is NOT applied either: the real Secret above
+          # replaces it.
+          kubectl apply -f /tmp/k8s-deploy/configmap.yaml \
+                        -f /tmp/k8s-deploy/api-deployment.yaml \
+                        -f /tmp/k8s-deploy/ui-deployment.yaml \
+                        -f /tmp/k8s-deploy/ingress.yaml
+          # m-25: rollout status without --timeout hangs until the
+          # job-level timeout when readiness never passes (e.g. during
+          # a model-capacity episode) — fail after 10m instead.
+          kubectl -n agent-platform rollout status deployment/agent-api --timeout=10m
+          kubectl -n agent-platform rollout status deployment/agent-ui --timeout=10m
 
       # Post-deploy Ingress check. This step MUST run against the real
       # cluster in a real deploy (it is not skipped); it stays

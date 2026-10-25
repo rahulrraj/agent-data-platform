@@ -17,10 +17,21 @@ spec:
       labels:
         app: agent-api
     spec:
+      # Matches the image's non-root user (Dockerfile creates appuser
+      # UID 10001 and chowns /app to it).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: api
           image: agent-data-platform:latest # <-- your registry image
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 8000
           envFrom:

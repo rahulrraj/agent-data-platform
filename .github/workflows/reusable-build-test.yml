@@ -53,6 +53,11 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          # Same pinned version as the deploy jobs (m-21): plan
+          # artifacts are version-sensitive, so fmt/validate must not
+          # run a different Terraform than plan/apply do.
+          terraform_version: "1.9.0"
       - name: Check formatting
         run: terraform fmt -check -recursive deploy/terraform
       - name: Validate stacks (no backend, no AWS access)

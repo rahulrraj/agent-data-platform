@@ -13,3 +13,9 @@ build/
 *.tfstate*
 .terraform/
 *.tfplan
+# Local-only k8s Secret template (m-7): secret.yaml holds credential
+# placeholders and must never be committed, even as a template — it was
+# previously tracked with a well-known default password. Note: gitignore
+# does not untrack an already-tracked file, so it was also removed from
+# the index with `git rm --cached` (the file stays on disk locally).
+deploy/k8s/secret.yaml

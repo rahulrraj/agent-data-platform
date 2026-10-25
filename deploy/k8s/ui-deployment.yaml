@@ -17,12 +17,22 @@ spec:
       labels:
         app: agent-ui
     spec:
+      # Matches the nginx-unprivileged image (nginx user, UID 101).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: ui
           image: agent-ui:latest # <-- your registry image
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
-            - containerPort: 80
+            - containerPort: 8080
           resources:
             requests:
               cpu: "50m"
@@ -41,4 +51,6 @@ spec:
     app: agent-ui
   ports:
     - port: 80
-      targetPort: 80
+      # The UI container listens on 8080 (non-root nginx); the Service
+      # port stays 80 so the Ingress is unchanged.
+      targetPort: 8080

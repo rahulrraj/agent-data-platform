@@ -1,3 +1,6 @@
+# Base is minor-pinned (3.12-slim). Digest pinning is deferred: digests
+# are per-architecture and could not be resolved without docker here;
+# a digest pin must cover both amd64 and arm64 manifests, not one arch.
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -9,6 +12,13 @@ COPY src/ src/
 # (Dockerfile.lambda already copies it; this fixes the EKS/manual path.)
 COPY registry/ registry/
 RUN pip install --no-cache-dir ".[postgres]"
+
+# Run as non-root on EKS (m-27): /app is chowned so the default
+# embedding cache (embedding_cache.db, relative to /app) stays writable.
+# The manifests pin the same UID (10001) in their securityContext.
+RUN groupadd -r appuser -g 10001 && useradd -r -u 10001 -g appuser appuser \
+    && chown -R appuser:appuser /app
+USER appuser
 
 EXPOSE 8000
 

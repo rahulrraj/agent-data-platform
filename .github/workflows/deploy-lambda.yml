@@ -54,6 +54,17 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      # m-21: deploy jobs must install Terraform themselves — the
+      # reusable workflow does, but these jobs previously invoked
+      # `terraform` with no install step, relying on whatever the
+      # runner happens to preinstall. Pinned to 1.9.0, the version this
+      # repo's Terraform was built against; the plan artifact below is
+      # version-sensitive, so the apply job pins the same version.
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: "1.9.0"
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
@@ -85,8 +96,21 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           IMAGE="${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-lambda-api:$IMAGE_TAG"
-          docker build -f Dockerfile.lambda -t "$IMAGE" .
-          docker push "$IMAGE"
+          # The repo is IMMUTABLE, so a re-run for the same commit
+          # cannot re-push the same tag — skip the push when it is
+          # already there instead of failing the re-run.
+          if aws ecr describe-images \
+              --repository-name "${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-lambda-api" \
+              --image-ids "imageTag=$IMAGE_TAG" \
+              --region "${{ env.AWS_REGION }}" >/dev/null 2>&1; then
+            echo "Image $IMAGE_TAG already exists (workflow re-run) — skipping build+push."
+          else
+            # --platform matters: the Lambda function is x86_64, and a
+            # plain build on an arm64 host would produce an image that
+            # fails on the function (m-27).
+            docker build --platform linux/amd64 -f Dockerfile.lambda -t "$IMAGE" .
+            docker push "$IMAGE"
+          fi
 
       - name: Terraform plan (Lambda stack)
         working-directory: deploy/terraform/stacks/aws-lambda
@@ -99,9 +123,12 @@ jobs:
           # workflow already used for its Secret).
           export TF_VAR_data_connections="${TF_VAR_data_connections:-{}}"
           MODEL_PROVIDER="${MODEL_PROVIDER:-gemini}"
-          EXTRA_VARS=""
+          # Array, not a bare string: an unquoted $EXTRA_VARS splits on
+          # whitespace, and a quoted "$EXTRA_VARS" would pass an empty
+          # argument to terraform when the provider is not bedrock.
+          EXTRA_VARS=()
           if [ "$MODEL_PROVIDER" = "bedrock" ]; then
-            EXTRA_VARS="-var=enable_bedrock_invoke=true"
+            EXTRA_VARS=(-var=enable_bedrock_invoke=true)
           fi
           terraform init -input=false
           terraform plan -input=false -out=tfplan \
@@ -109,7 +136,7 @@ jobs:
             -var="environment=${{ env.ENVIRONMENT }}" \
             -var="image_tag=${{ github.sha }}" \
             -var="model_provider=$MODEL_PROVIDER" \
-            $EXTRA_VARS
+            "${EXTRA_VARS[@]}"
 
       - name: Upload plan artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -137,6 +164,13 @@ jobs:
       TF_VAR_data_connections: ${{ secrets.TF_VAR_data_connections }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # Same pinned Terraform as the plan job (m-21): plan artifacts
+      # are version-sensitive, so apply must not use a different one.
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: "1.9.0"
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
@@ -174,6 +208,15 @@ jobs:
       # NOTE: with the default function_url_auth=AWS_IAM, a browser
       # cannot sign requests to the Function URL — see
       # deploy/terraform/README.md. NONE is dev-only.
+      # m-26: the UI build previously ran with whatever Node the
+      # runner preinstalls and no npm cache; pin Node 20 (same as the
+      # reusable workflow) with the npm cache.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: src/ui/package-lock.json
+
       - name: Build and upload UI
         working-directory: src/ui
         env:

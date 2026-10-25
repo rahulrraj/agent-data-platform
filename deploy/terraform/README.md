@@ -33,7 +33,10 @@ group). The workload itself is never duplicated in Terraform:
 
 ## Prerequisites
 
-- An AWS account, AWS CLI v2, Terraform >= 1.5, Docker.
+- An AWS account, AWS CLI v2, Terraform >= 1.5, Docker. The CI
+  workflows pin Terraform 1.9.0 (plan artifacts are version-sensitive,
+  so plan, apply, and fmt/validate all use the same version); use
+  1.9.0 locally for matching plans.
 - For the Lambda stack: nothing else. For the EKS stack: `kubectl`, and
   an NGINX ingress controller installed in the cluster before the
   `deploy/k8s/ingress.yaml` Ingress routes traffic (the manifests assume
@@ -111,6 +114,81 @@ production can set `deletion_protection = true`,
 `skip_final_snapshot = false` without forking the module; dev keeps
 clean teardown.
 
+## Stack tuning knobs (m-20)
+
+Both stacks pass their shared modules' tuning knobs through as stack
+variables, so operators do not edit stack `main.tf` to tune: networking
+(`vpc_cidr_block`, `az_count`, `enable_nat`, `nat_per_az`,
+`enable_vpc_endpoints`), postgres (`db_engine_version`,
+`db_instance_class`, `db_allocated_storage`, `db_multi_az`,
+`backup_retention_period`), ECR (`ecr_force_delete`,
+`ecr_image_tag_mutability`, `ecr_keep_image_count`), and — Lambda
+only — frontend (`frontend_force_destroy`,
+`frontend_enable_versioning`, `frontend_access_log_bucket`) plus the
+app env vars (`agent_framework`, `gemini_model`,
+`gemini_embed_model`). Defaults match the previous hardcoded behavior
+exactly. Production profile, as a starting point: `nat_per_az = true`,
+`enable_vpc_endpoints = true`, `db_multi_az = true`,
+`db_instance_class` raised with `lambda_reserved_concurrency` (see
+below), `deletion_protection = true`, `skip_final_snapshot = false`,
+`ecr_force_delete = false`, `frontend_force_destroy = false`,
+`frontend_access_log_bucket` set. Module outputs are pruned to what
+the stacks consume; stack outputs are the stable operator/pipeline
+interface and are all kept.
+
+## Lambda concurrency vs RDS (m-32)
+
+The Lambda stack sets `reserved_concurrent_executions = 10` by
+default (`lambda_reserved_concurrency`). Each execution can hold its
+own Postgres connection and `db.t4g.micro` has on the order of ~100
+connections, so unbounded concurrency under burst load exhausts the
+instance and fails otherwise-healthy invocations. Raise the cap
+together with `db_instance_class` (or add RDS Proxy) before any
+load-bearing use; `null` means unreserved (no cap — do not use with
+the micro instance under load).
+
+## Networking: NAT, endpoints, validation
+
+- Single NAT (default) is a single-AZ egress SPOF: if the first AZ
+  fails, Lambda model-API egress and EKS image pulls from every AZ
+  fail. Cost is why it is the dev default; set `nat_per_az = true`
+  for production (one NAT + route table per AZ).
+- `enable_vpc_endpoints = true` adds an S3 gateway endpoint plus
+  ECR/STS interface endpoints on the private subnets, reducing NAT
+  dependence (it requires `enable_nat = true`, since the gateway
+  endpoint attaches to the private route tables).
+- Validation fails fast: `cidr_block` must be /24 or shorter (subnets
+  are carved as /24s), `az_count` must be 1–128 and must not exceed
+  the region's AZs (the AZ slice fails the plan if it does).
+- Cross-field checks the variable system cannot express live on the
+  resources instead: the Lambda function preconditions that gemini
+  has a key and bedrock has `enable_bedrock_invoke`, and the EKS node
+  group preconditions `min <= desired <= max`. They fail the plan,
+  not the first model call or the first scale event.
+
+## Frontend module (m-28)
+
+S3 versioning is on by default and SSE-S3 encryption is configured:
+with the pipeline's `s3 sync --delete`, versioning is what makes a
+bad UI build recoverable (previous objects become versions instead of
+vanishing). `force_destroy` is a variable (dev default true; set
+false for production). CloudFront access logging is opt-in via
+`frontend_access_log_bucket` (empty = disabled, the dev default) —
+set it before any public production use. No WAF is attached by this
+module, deliberately: adding a WAF web ACL is a separate production
+step, not built here.
+
+## ECR tags and rollback (m-29)
+
+Repositories default to `IMMUTABLE` tags with a 30-image lifecycle
+(the rollback window). The workflows push content-addressed
+`github.sha` tags and skip the push when the tag already exists, so
+re-running a workflow for the same commit does not fail on the
+immutable tag. Manual pushes must therefore use a unique tag per
+build (a SHA, not `latest`): re-pushing `latest` to an immutable repo
+fails. Set `ecr_image_tag_mutability = "MUTABLE"` only for a manual
+flow that re-pushes one tag.
+
 ## First deployment (manual, no pipeline)
 
 ```bash
@@ -122,9 +200,13 @@ cd deploy/terraform/stacks/aws-lambda   # or aws-eks
 #    EKS repos:   agent-data-platform-dev-eks-api, agent-data-platform-dev-eks-ui
 #    (project-environment-stack-image; see the stack's name_prefix.)
 aws ecr create-repository --repository-name <repo> --region us-east-1
-#    Lambda:  docker build -f Dockerfile.lambda -t <ecr-url>:latest .
-#    EKS:     docker build -t <ecr-api-url>:latest .   (repo root)
-#             docker build -f src/ui/Dockerfile -t <ecr-ui-url>:latest .
+#    Tag with a unique tag per build (a SHA), NOT latest: the repos
+#    are IMMUTABLE by default, so re-pushing latest fails.
+#    Lambda:  docker build --platform linux/amd64 -f Dockerfile.lambda -t <ecr-url>:<tag> .
+#             (--platform matters: the function is x86_64; a plain build
+#             on an arm64 host produces an image that fails on it.)
+#    EKS:     docker build -t <ecr-api-url>:<tag> .   (repo root)
+#             docker build -f src/ui/Dockerfile -t <ecr-ui-url>:<tag> .
 #    Push with: aws ecr get-login-password | docker login ...
 
 # 2. Apply. Secrets come from TF_VAR_* env vars, never committed values.
@@ -147,26 +229,35 @@ EKS manifest deploy (after `terraform apply` + `aws eks update-kubeconfig`):
 
 ```bash
 # Substitute the ECR image URLs into temp copies (never edit the
-# committed manifests for this), set the provider, skip the in-cluster
-# Postgres (RDS replaces it) and the placeholder Secret (created below).
+# committed manifests for this), set the provider and region, skip the
+# in-cluster Postgres (RDS replaces it) and the placeholder Secret
+# template (the real Secret is created below, BEFORE the Deployments —
+# pods reference it via secretKeyRef, so Deployments applied first sit
+# in CreateContainerConfigError until it appears).
 cp -r deploy/k8s /tmp/k8s-deploy
 sed -i "s|agent-data-platform:latest|<ecr-api-url>:<tag>|" /tmp/k8s-deploy/api-deployment.yaml
 sed -i "s|agent-ui:latest|<ecr-ui-url>:<tag>|" /tmp/k8s-deploy/ui-deployment.yaml
 sed -i 's|AGENT_MODEL_PROVIDER: "ollama"|AGENT_MODEL_PROVIDER: "gemini"|' /tmp/k8s-deploy/configmap.yaml
+sed -i 's|^  AWS_REGION: .*|  AWS_REGION: "us-east-1"|' /tmp/k8s-deploy/configmap.yaml
 sed -i 's|host: agent-platform.example.com|host: your-domain.example.com|' /tmp/k8s-deploy/ingress.yaml
-kubectl apply -f /tmp/k8s-deploy/namespace.yaml \
-              -f /tmp/k8s-deploy/configmap.yaml \
-              -f /tmp/k8s-deploy/api-deployment.yaml \
-              -f /tmp/k8s-deploy/ui-deployment.yaml \
-              -f /tmp/k8s-deploy/ingress.yaml
+kubectl apply -f /tmp/k8s-deploy/namespace.yaml
 kubectl -n agent-platform create secret generic agent-platform-secrets \
   --from-literal=POSTGRES_DSN="$(terraform output -raw rds_dsn)" \
   --from-literal=DATA_CONNECTIONS='{}' \
   --from-literal=GEMINI_API_KEY="$GEMINI_API_KEY" \
   --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n agent-platform rollout status deployment/agent-api
-kubectl -n agent-platform rollout status deployment/agent-ui
+kubectl apply -f /tmp/k8s-deploy/configmap.yaml \
+              -f /tmp/k8s-deploy/api-deployment.yaml \
+              -f /tmp/k8s-deploy/ui-deployment.yaml \
+              -f /tmp/k8s-deploy/ingress.yaml
+kubectl -n agent-platform rollout status deployment/agent-api --timeout=10m
+kubectl -n agent-platform rollout status deployment/agent-ui --timeout=10m
 ```
+
+⚠ The Ingress above serves **plaintext HTTP** as committed (no
+`tls:` block). Do not point real DNS at it until TLS is configured
+via cert-manager — see the warning in `deploy/k8s/README.md` and the
+commented `tls:` block in `deploy/k8s/ingress.yaml`.
 
 ## GitHub Actions + OIDC (pipeline prerequisites)
 
@@ -186,11 +277,27 @@ Deploys use GitHub OIDC, never static AWS keys. One-time setup:
     "Action": "sts:AssumeRoleWithWebIdentity",
     "Condition": {
       "StringEquals": { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
-      "StringLike": { "token.actions.githubusercontent.com:sub": "repo:rahulrraj/agent-data-platform:*" }
+      "StringLike": { "token.actions.githubusercontent.com:sub": [
+        "repo:rahulrraj/agent-data-platform:ref:refs/heads/main",
+        "repo:rahulrraj/agent-data-platform:environment:deploy-lambda",
+        "repo:rahulrraj/agent-data-platform:environment:deploy-eks"
+      ] }
     }
   }]
 }
 ```
+
+Why these three subjects (m-30): the previous example used
+`repo:rahulrraj/agent-data-platform:*`, which lets any ref and any
+workflow in the repo assume the role. The scoped version covers only
+what the workflows actually present: plan jobs carry no GitHub
+environment, so their subject is the branch ref (`ref:refs/heads/main`
+— pushes to main and dispatches from main); apply jobs carry the
+`deploy-lambda` / `deploy-eks` environments, so their subject is the
+environment. A dispatch from any other branch therefore cannot assume
+the role. Caveat, unchanged: the real AWS role lives outside this
+repo, so its actual trust policy cannot be verified from here — this
+is the policy to create, not proof of the one that exists.
 
 Attach the permissions the deploy needs: ECR push/pull, Lambda create/update,
 Terraform's EC2/VPC/RDS/EKS/IAM/CloudFront/S3 scope for the stacks, and
@@ -237,8 +344,15 @@ safe to merge before the account is wired in.
   returns HTML, not JSON.
 - EKS: no `VITE_API_URL` is needed — the Ingress routes `/api/*` to
   the API service. The workflow substitutes `INGRESS_HOST` into the
-  Ingress and then checks (non-fatally) that the Ingress has a
-  load-balancer address and that `/api/health` answers through it.
+  Ingress, the ECR image URLs and `AGENT_MODEL_PROVIDER` into the
+  manifests, and `AWS_REGION` into the ConfigMap (previously the
+  manifests relied on the SDK default chain, which has no region
+  in-cluster — Bedrock on EKS needs the region set; credentials via
+  IRSA remain a follow-up, not built here), creates the Secret
+  before the Deployments, and then checks (non-fatally) that the
+  Ingress has a load-balancer address and that `/api/health` answers
+  through it. Rollout status carries `--timeout=10m` so a readiness
+  failure surfaces instead of hanging the job.
 
 ## How to extend: adding a platform (GCP and beyond)
 

@@ -1,13 +1,29 @@
 # Routes /api/* to the API and everything else to the React UI.
 # Set ingressClassName to your controller (nginx, gce, alb, ...) and the
-# host to your domain. TLS: add your cert-manager annotations/cluster-issuer.
+# host to your domain.
+#
+# ⚠ TLS WARNING: as committed, this Ingress serves PLAINTEXT HTTP —
+# there is no tls: block and no cert-manager annotation. That is fine
+# for a local/dev cluster, but DO NOT expose real traffic (or real
+# credentials — the API has no auth of its own) through it until TLS is
+# configured: install cert-manager, add the annotation below, and
+# uncomment the tls: block with your ClusterIssuer and a real host.
+# (The Terraform EKS path has the same gap: its workflow substitutes
+# the host but adds no TLS either.)
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: agent-platform
   namespace: agent-platform
+  # annotations:
+  #   cert-manager.io/cluster-issuer: letsencrypt-prod
+  #   nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
 spec:
   ingressClassName: nginx # <-- your ingress controller
+  # tls:
+  #   - hosts:
+  #       - agent-platform.example.com # <-- your domain, same as below
+  #     secretName: agent-platform-tls
   rules:
     - host: agent-platform.example.com # <-- your domain
       http:

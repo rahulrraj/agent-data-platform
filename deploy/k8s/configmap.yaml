@@ -8,6 +8,15 @@ metadata:
 data:
   AGENT_FRAMEWORK: "strands"
   AGENT_MODEL_PROVIDER: "ollama"
+  # Region for AWS SDK calls (Bedrock, when the provider is bedrock):
+  # the Lambda stack sets AWS_REGION, but these manifests previously
+  # relied on the SDK default chain, which has no region in-cluster.
+  # The deploy-eks workflow substitutes the real region here; the
+  # committed default is only a placeholder for local clusters.
+  # NOTE: a region alone grants no Bedrock access — pods still need
+  # credentials. The correct pattern is IRSA (OIDC provider +
+  # service-account role), which is a known follow-up, NOT built here.
+  AWS_REGION: "us-east-1"
   # Point at an in-cluster Ollama, or an external host. The API must reach it.
   OLLAMA_HOST: "http://ollama:11434"
   OLLAMA_MODEL: "qwen2.5:1.5b"
