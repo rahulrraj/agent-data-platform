@@ -3,7 +3,5 @@ output "role_arn" {
   value       = aws_iam_role.this.arn
 }
 
-output "role_name" {
-  description = "Name of the IAM role."
-  value       = aws_iam_role.this.name
-}
+# Pruned on purpose (2026-10-25 review cleanup): role_name was exported
+# but consumed by no stack or workflow — the stacks use role_arn only.

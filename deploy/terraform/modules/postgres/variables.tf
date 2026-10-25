@@ -79,6 +79,17 @@ variable "skip_final_snapshot" {
   default     = true
 }
 
+variable "backup_retention_period" {
+  description = "Automated backup retention in days (0 disables automated backups). 7 by default: no PITR window below that."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.backup_retention_period >= 0 && var.backup_retention_period <= 35
+    error_message = "backup_retention_period must be between 0 and 35 days (RDS limit)."
+  }
+}
+
 variable "tags" {
   description = "Tags applied to all resources."
   type        = map(string)

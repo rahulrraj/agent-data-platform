@@ -21,9 +21,9 @@ variable "enable_bedrock_invoke" {
 }
 
 variable "bedrock_model_arns" {
-  description = "Model ARNs the Bedrock invoke policy covers. Default \"*\" is broad; scope to specific model ARNs for production."
+  description = "Model ARNs the Bedrock invoke policy covers. Fail-closed default: empty, so enabling bedrock invoke without scoping the ARNs grants nothing (the policy resource is still created with an empty Resource list only if the caller passes an empty list explicitly — set this whenever enable_bedrock_invoke is true). Never use \"*\" here: the Lambda stack computes scoped ARNs for its two configured models (foundation-model + inference-profile forms) from bedrock_model_id / bedrock_embed_model; override with explicit ARNs when using other models."
   type        = list(string)
-  default     = ["*"]
+  default     = []
 }
 
 variable "tags" {

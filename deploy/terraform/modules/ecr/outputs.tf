@@ -3,12 +3,6 @@ output "repository_url" {
   value       = aws_ecr_repository.this.repository_url
 }
 
-output "repository_arn" {
-  description = "ECR repository ARN."
-  value       = aws_ecr_repository.this.arn
-}
-
-output "repository_name" {
-  description = "ECR repository name."
-  value       = aws_ecr_repository.this.name
-}
+# Pruned on purpose (2026-10-25 review cleanup): repository_arn and
+# repository_name were exported but consumed by no stack or workflow —
+# the stacks and pipelines use repository_url only.

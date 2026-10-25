@@ -6,9 +6,28 @@
 
 resource "aws_s3_bucket" "this" {
   bucket_prefix = "${var.name}-ui-"
-  force_destroy = true
+  force_destroy = var.force_destroy
 
   tags = var.tags
+}
+
+resource "aws_s3_bucket_versioning" "this" {
+  bucket = aws_s3_bucket.this.id
+
+  versioning_configuration {
+    status = var.enable_versioning ? "Enabled" : "Suspended"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
+  bucket = aws_s3_bucket.this.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+    bucket_key_enabled = true
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "this" {
@@ -36,6 +55,15 @@ resource "aws_cloudfront_distribution" "this" {
     domain_name              = aws_s3_bucket.this.bucket_regional_domain_name
     origin_id                = "s3"
     origin_access_control_id = aws_cloudfront_origin_access_control.this.id
+  }
+
+  dynamic "logging_config" {
+    for_each = var.access_log_bucket != "" ? [1] : []
+    content {
+      bucket          = "${var.access_log_bucket}.s3.amazonaws.com"
+      prefix          = var.access_log_prefix
+      include_cookies = false
+    }
   }
 
   default_cache_behavior {

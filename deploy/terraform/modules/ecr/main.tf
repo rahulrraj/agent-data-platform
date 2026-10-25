@@ -4,7 +4,7 @@
 
 resource "aws_ecr_repository" "this" {
   name                 = var.name
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = var.image_tag_mutability
   force_delete         = var.force_delete
 
   image_scanning_configuration {
@@ -20,11 +20,11 @@ resource "aws_ecr_lifecycle_policy" "this" {
   policy = jsonencode({
     rules = [{
       rulePriority = 1
-      description  = "Keep the last 10 images"
+      description  = "Keep the last ${var.keep_image_count} images"
       selection = {
         tagStatus   = "any"
         countType   = "imageCountMoreThan"
-        countNumber = 10
+        countNumber = var.keep_image_count
       }
       action = { type = "expire" }
     }]

@@ -34,37 +34,53 @@ locals {
 module "networking" {
   source = "../../modules/networking"
 
-  name = local.name_prefix
-  tags = local.common_tags
+  name                 = local.name_prefix
+  cidr_block           = var.vpc_cidr_block
+  az_count             = var.az_count
+  enable_nat           = var.enable_nat
+  nat_per_az           = var.nat_per_az
+  enable_vpc_endpoints = var.enable_vpc_endpoints
+  tags                 = local.common_tags
 }
 
 module "postgres" {
   source = "../../modules/postgres"
 
-  name                = local.name_prefix
-  db_name             = var.db_name
-  username            = var.db_username
-  password            = var.db_password
-  deletion_protection = var.deletion_protection
-  skip_final_snapshot = var.skip_final_snapshot
-  subnet_ids          = module.networking.private_subnet_ids
-  vpc_id              = module.networking.vpc_id
-  allowed_cidr_blocks = [module.networking.vpc_cidr_block]
-  tags                = local.common_tags
+  name                    = local.name_prefix
+  engine_version          = var.db_engine_version
+  instance_class          = var.db_instance_class
+  allocated_storage       = var.db_allocated_storage
+  db_name                 = var.db_name
+  username                = var.db_username
+  password                = var.db_password
+  multi_az                = var.db_multi_az
+  deletion_protection     = var.deletion_protection
+  skip_final_snapshot     = var.skip_final_snapshot
+  backup_retention_period = var.backup_retention_period
+  subnet_ids              = module.networking.private_subnet_ids
+  vpc_id                  = module.networking.vpc_id
+  allowed_cidr_blocks     = [module.networking.vpc_cidr_block]
+  tags                    = local.common_tags
 }
 
 module "ecr_api" {
   source = "../../modules/ecr"
 
-  name = "${local.name_prefix}-api"
-  tags = local.common_tags
+  name                 = "${local.name_prefix}-api"
+  force_delete         = var.ecr_force_delete
+  image_tag_mutability = var.ecr_image_tag_mutability
+  keep_image_count     = var.ecr_keep_image_count
+  tags                 = local.common_tags
 }
 
 module "ecr_ui" {
   source = "../../modules/ecr"
 
-  name = "${local.name_prefix}-ui"
-  tags = local.common_tags
+  name                 = "${local.name_prefix}-ui"
+  force_delete         = var.ecr_force_delete
+  image_tag_mutability = var.ecr_image_tag_mutability
+  keep_image_count     = var.ecr_keep_image_count
+  tags                 = local.common_tags
 }
 
 module "iam_cluster_role" {
@@ -132,24 +148,70 @@ resource "aws_eks_node_group" "this" {
     max_size     = var.node_max_size
   }
 
+  # Cross-field validation (m-22): variable validation blocks cannot
+  # compare two variables, so the min <= desired <= max invariant is
+  # enforced here. Without it, an inverted scaling config applies
+  # cleanly and fails only when the node group tries to scale.
+  lifecycle {
+    precondition {
+      condition     = var.node_min_size <= var.node_desired_size && var.node_desired_size <= var.node_max_size
+      error_message = "Node scaling must satisfy min_size <= desired_size <= max_size (got min=${var.node_min_size}, desired=${var.node_desired_size}, max=${var.node_max_size})."
+    }
+  }
+
   tags = local.common_tags
 }
 
-# Core addons (no version pinned — the provider resolves the default for
-# the cluster version). Without these, pods have no networking or DNS.
+# Core addons. Versions are resolved per cluster version via the
+# aws_eks_addon_version data sources (most recent compatible version),
+# instead of being left to whatever the provider resolves at apply
+# time — two applies of the same config must not produce different
+# addon versions. Without these addons, pods have no networking or DNS.
+data "aws_eks_addon_version" "vpc_cni" {
+  addon_name         = "vpc-cni"
+  kubernetes_version = var.cluster_version
+  most_recent        = true
+}
+
+data "aws_eks_addon_version" "kube_proxy" {
+  addon_name         = "kube-proxy"
+  kubernetes_version = var.cluster_version
+  most_recent        = true
+}
+
+data "aws_eks_addon_version" "coredns" {
+  addon_name         = "coredns"
+  kubernetes_version = var.cluster_version
+  most_recent        = true
+}
+
 resource "aws_eks_addon" "vpc_cni" {
-  cluster_name = aws_eks_cluster.this.name
-  addon_name   = "vpc-cni"
+  cluster_name  = aws_eks_cluster.this.name
+  addon_name    = "vpc-cni"
+  addon_version = data.aws_eks_addon_version.vpc_cni.version
+
+  tags = local.common_tags
 }
 
 resource "aws_eks_addon" "kube_proxy" {
-  cluster_name = aws_eks_cluster.this.name
-  addon_name   = "kube-proxy"
+  cluster_name  = aws_eks_cluster.this.name
+  addon_name    = "kube-proxy"
+  addon_version = data.aws_eks_addon_version.kube_proxy.version
+
+  tags = local.common_tags
 }
 
 resource "aws_eks_addon" "coredns" {
-  cluster_name = aws_eks_cluster.this.name
-  addon_name   = "coredns"
+  cluster_name  = aws_eks_cluster.this.name
+  addon_name    = "coredns"
+  addon_version = data.aws_eks_addon_version.coredns.version
+
+  # On cluster upgrades the managed addon must win over any drifted
+  # in-cluster CoreDNS config, or upgrades stall on conflicts.
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+
+  tags = local.common_tags
 
   depends_on = [aws_eks_node_group.this]
 }

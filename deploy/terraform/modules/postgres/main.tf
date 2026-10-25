@@ -62,7 +62,7 @@ resource "aws_db_instance" "this" {
   multi_az                = var.multi_az
   deletion_protection     = var.deletion_protection
   skip_final_snapshot     = var.skip_final_snapshot
-  backup_retention_period = 7
+  backup_retention_period = var.backup_retention_period
   storage_type            = "gp3"
   storage_encrypted       = true
 

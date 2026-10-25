@@ -3,22 +3,18 @@ output "bucket_name" {
   value       = aws_s3_bucket.this.id
 }
 
-output "bucket_arn" {
-  description = "S3 bucket ARN."
-  value       = aws_s3_bucket.this.arn
-}
-
 output "distribution_id" {
   description = "CloudFront distribution ID (pipeline invalidation target)."
   value       = aws_cloudfront_distribution.this.id
-}
-
-output "distribution_domain_name" {
-  description = "CloudFront domain name serving the UI."
-  value       = aws_cloudfront_distribution.this.domain_name
 }
 
 output "ui_url" {
   description = "HTTPS URL of the UI."
   value       = "https://${aws_cloudfront_distribution.this.domain_name}"
 }
+
+# Pruned on purpose (2026-10-25 review cleanup): bucket_arn and
+# distribution_domain_name were exported but consumed by no stack or
+# workflow — the stacks use bucket_name, distribution_id, and ui_url.
+# (The bucket policy in main.tf uses the bucket ARN internally; that is
+# not an output.)
