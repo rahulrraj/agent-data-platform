@@ -69,9 +69,50 @@ describe("renderMarkdown", () => {
     expect(li.querySelector("code.inline-code").textContent).toBe("calculate");
   });
 
-  it("leaves an unclosed fence as plain text", () => {
+  it("renders an unclosed fence as a code block (m-38 streaming flicker)", () => {
+    // Mid-stream the closing fence has not arrived yet; rendering the
+    // open fence as a code block immediately avoids the plain-text ->
+    // code-block flip when it does arrive.
     const c = renderMd("```python\nprint(42)");
-    expect(c.querySelector(".code-block")).toBeNull();
-    expect(c.textContent).toContain("print(42)");
+    expect(c.querySelector(".code-block")).not.toBeNull();
+    expect(c.querySelector(".code-block pre code").textContent).toBe(
+      "print(42)"
+    );
+  });
+
+  it("accepts non-word language tokens like c++ and shell-session (m-38)", () => {
+    const c = renderMd("```c++\nint x;\n```");
+    expect(c.querySelector(".code-head span").textContent).toBe("c++");
+    const c2 = renderMd("```shell-session\n$ ls\n```");
+    expect(c2.querySelector(".code-head span").textContent).toBe(
+      "shell-session"
+    );
+  });
+
+  it("renders links and rejects unsafe schemes (m-39)", () => {
+    const c = renderMd("See [docs](https://example.com/x) and [mail](mailto:a@b.c).");
+    const links = c.querySelectorAll("a");
+    expect(links).toHaveLength(2);
+    expect(links[0].getAttribute("href")).toBe("https://example.com/x");
+    expect(links[0].getAttribute("target")).toBe("_blank");
+    expect(links[0].getAttribute("rel")).toContain("noopener");
+    expect(links[1].getAttribute("href")).toBe("mailto:a@b.c");
+    const c2 = renderMd("[x](javascript:alert(1))");
+    expect(c2.querySelector("a")).toBeNull();
+    expect(c2.textContent).toContain("javascript:alert(1)");
+  });
+
+  it("renders headings instead of literal hashes (m-39)", () => {
+    const c = renderMd("## Result\nSome text");
+    expect(c.querySelector("h2").textContent).toBe("Result");
+    expect(c.querySelector(".md-para").textContent).toBe("Some text");
+  });
+
+  it("renders simple pipe tables (m-39)", () => {
+    const c = renderMd("| A | B |\n| --- | --- |\n| 1 | 2 |");
+    const table = c.querySelector("table.md-table");
+    expect(table).not.toBeNull();
+    expect(table.querySelector("th").textContent).toBe("A");
+    expect(table.querySelector("td").textContent).toBe("1");
   });
 });

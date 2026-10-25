@@ -1,10 +1,15 @@
-import React from "react";
+import React, { useId } from "react";
 
 export function Sparkle({ size = 22 }) {
+  // Nit: every Sparkle previously rendered <linearGradient id="spark-g">,
+  // duplicating the DOM id (one per avatar/welcome logo). useId gives
+  // each instance its own id; colons are stripped because React's ids
+  // contain ":" which is awkward inside a url(#...) fragment.
+  const gradientId = `spark-g-${useId().replace(/:/g, "")}`;
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
       <defs>
-        <linearGradient id="spark-g" x1="0" y1="0" x2="24" y2="24">
+        <linearGradient id={gradientId} x1="0" y1="0" x2="24" y2="24">
           <stop offset="0%" stopColor="#4f7cff" />
           <stop offset="55%" stopColor="#a855f7" />
           <stop offset="100%" stopColor="#f472b6" />
@@ -12,11 +17,11 @@ export function Sparkle({ size = 22 }) {
       </defs>
       <path
         d="M12 2c.7 4.8 3.2 7.3 8 8-4.8.7-7.3 3.2-8 8-.7-4.8-3.2-7.3-8-8 4.8-.7 7.3-3.2 8-8Z"
-        fill="url(#spark-g)"
+        fill={`url(#${gradientId})`}
       />
       <path
         d="M19 3c.3 2 1.3 3 3.3 3.3-2 .3-3 1.3-3.3 3.2-.3-1.9-1.3-2.9-3.2-3.2 1.9-.3 2.9-1.3 3.2-3.3Z"
-        fill="url(#spark-g)"
+        fill={`url(#${gradientId})`}
         opacity="0.85"
       />
     </svg>

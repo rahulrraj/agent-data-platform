@@ -93,6 +93,70 @@ describe("streamChat", () => {
     await expect(collect()).rejects.toThrow("API error 500");
   });
 
+  it("keeps the server error detail on a non-OK response (m-35)", async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 502,
+      clone: () => ({
+        json: async () => ({ detail: "model overloaded" }),
+      }),
+      body: sseStream([]),
+    }));
+    await expect(collect()).rejects.toThrow(
+      "API error 502: model overloaded"
+    );
+  });
+
+  it("throws on a missing response body (m-34)", async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, body: null }));
+    await expect(collect()).rejects.toThrow("empty response body");
+  });
+
+  it("parses CRLF framing (m-33)", async () => {
+    mockFetch([
+      `data: ${JSON.stringify({ type: "text", payload: "hi" })}\r\n\r\n`,
+      "data: [DONE]\r\n\r\n",
+    ]);
+    const events = await collect();
+    expect(events).toEqual([{ type: "text", payload: "hi" }]);
+  });
+
+  it("concatenates multi-line data: blocks (m-33)", async () => {
+    // split at a JSON token boundary: the joined lines are valid JSON
+    // with the newline acting as whitespace between tokens.
+    mockFetch([
+      'data: {"type":"text",\ndata: "payload":"multi"}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    const events = await collect();
+    expect(events).toEqual([{ type: "text", payload: "multi" }]);
+  });
+
+  it("cancels the reader when the stream ends at [DONE] (m-34)", async () => {
+    const encoder = new TextEncoder();
+    let cancelled = false;
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        pull(controller) {
+          controller.enqueue(encoder.encode(ev("text", "done")));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+    }));
+    await collect();
+    expect(cancelled).toBe(true);
+  });
+
+  it("counts malformed frames in the incomplete-reply error (m-34)", async () => {
+    mockFetch(["data: not-json\n\n", ev("text", "half")]);
+    await expect(collect()).rejects.toThrow("1 malformed frame");
+  });
+
   it("aborts cleanly when the signal fires", async () => {
     const controller = new AbortController();
     const encoder = new TextEncoder();

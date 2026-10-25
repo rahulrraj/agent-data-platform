@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import { PlusIcon } from "./icons.jsx";
 
 export default function Sidebar({
@@ -11,6 +11,15 @@ export default function Sidebar({
   onClose,
   apiOk,
 }) {
+  const asideRef = useRef(null);
+  // m-44: focus management — when the sidebar opens (mobile overlay),
+  // move focus into it so keyboard users land on the first control.
+  useEffect(() => {
+    if (open) {
+      asideRef.current?.querySelector(".new-chat-btn")?.focus();
+    }
+  }, [open ]);
+
   return (
     <>
       <div
@@ -18,7 +27,7 @@ export default function Sidebar({
         onClick={onClose}
         aria-hidden
       />
-      <aside className={`sidebar ${open ? "open" : ""}`}>
+      <aside className={`sidebar ${open ? "open" : ""}`} ref={asideRef}>
         <div className="sidebar-top">
           <button className="new-chat-btn" onClick={onNew}>
             <PlusIcon />
@@ -33,15 +42,27 @@ export default function Sidebar({
             <div
               key={s.id}
               className={`session-item ${s.id === activeId ? "active" : ""}`}
-              onClick={() => onSelect(s.id)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => e.key === "Enter" && onSelect(s.id)}
             >
-              <span className="session-title">{s.title || "New conversation"}</span>
+              {/* m-44: the title is a real <button> (keyboard-operable
+                  with Enter and Space by default), not a div with
+                  role="button" and an Enter-only handler. It is a
+                  sibling of the delete button, not its parent, so no
+                  interactive element is nested inside another. */}
               <button
+                type="button"
+                className="session-title-btn"
+                onClick={() => onSelect(s.id)}
+                aria-current={s.id === activeId ? "true" : undefined}
+              >
+                <span className="session-title">
+                  {s.title || "New conversation"}
+                </span>
+              </button>
+              <button
+                type="button"
                 className="session-del"
                 title="Delete conversation"
+                aria-label={`Delete conversation ${s.title || "New conversation"}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   onDelete(s.id);

@@ -666,6 +666,71 @@ button {
   }
 }
 
+/* ---------- code-review 2026-10-24 fixes (Minors, m-33–m-47) ---------- */
+
+/* m-39: headings and pipe tables rendered by markdown.jsx */
+.md-heading {
+  margin: 0 0 10px;
+  line-height: 1.3;
+}
+
+.md-h1 { font-size: 22px; }
+.md-h2 { font-size: 19px; }
+.md-h3 { font-size: 17px; }
+.md-h4 { font-size: 16px; }
+.md-h5 { font-size: 15px; }
+.md-h6 { font-size: 14px; }
+
+.md-table {
+  margin: 0 0 12px;
+  border-collapse: collapse;
+  font-size: 14px;
+  display: block;
+  overflow-x: auto;
+}
+
+.md-table th,
+.md-table td {
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  text-align: left;
+}
+
+.md-table th {
+  background: var(--code-head);
+  font-weight: 600;
+}
+
+/* m-45: explicit note for empty replies and truncated output */
+.empty-note {
+  font-size: 14px;
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+/* m-44: session title as a real button (sibling of the delete button) */
+.session-title-btn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+/* m-41(c): suggestion chips honour the offline/not-ready state */
+.chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+  transform: none;
+}
+
 /* ---------- code-review 2026-10-24 fixes (M-27, M-25, M-29) ---------- */
 
 .status-dot.checking {

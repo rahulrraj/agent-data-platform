@@ -1,7 +1,13 @@
 import React, { useEffect, useRef } from "react";
 import { SendIcon, StopIcon } from "./icons.jsx";
 
-export default function Composer({ onSend, onStop, streaming, disabled }) {
+export default function Composer({
+  onSend,
+  onStop,
+  streaming,
+  disabled,
+  focusKey,
+}) {
   const ref = useRef(null);
 
   const autoresize = () => {
@@ -12,6 +18,12 @@ export default function Composer({ onSend, onStop, streaming, disabled }) {
   };
 
   useEffect(autoresize, []);
+
+  // m-44: focus management — a new chat moves focus to the composer
+  // so keyboard users can type immediately instead of tabbing to it.
+  useEffect(() => {
+    if (focusKey > 0) ref.current?.focus();
+  }, [focusKey]);
 
   const submit = () => {
     const el = ref.current;
@@ -35,13 +47,21 @@ export default function Composer({ onSend, onStop, streaming, disabled }) {
               e.preventDefault();
               submit();
             }
+            // m-37: Esc here covers the focused-textarea case; the
+            // window-level listener in App.jsx covers every other
+            // focus (e.g. after clicking Stop, focus is on the button).
             if (e.key === "Escape" && streaming) onStop();
           }}
           disabled={disabled}
           aria-label="Message"
         />
         {streaming ? (
-          <button className="send-btn stop" onClick={onStop} title="Stop (Esc)">
+          <button
+            className="send-btn stop"
+            onClick={onStop}
+            title="Stop (Esc)"
+            aria-label="Stop generating"
+          >
             <StopIcon />
           </button>
         ) : (
@@ -49,6 +69,7 @@ export default function Composer({ onSend, onStop, streaming, disabled }) {
             className="send-btn"
             onClick={submit}
             title="Send (Enter)"
+            aria-label="Send message"
             disabled={disabled}
           >
             <SendIcon />
