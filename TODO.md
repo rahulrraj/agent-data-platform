@@ -28,6 +28,19 @@ can move.
   throughput), or run tests on his own machine.
 - **Kubernetes manifests applied to a real cluster** — `deploy/k8s/` is
   written but never applied or tested against a real cluster.
+- **Titan discovery-cutoff calibration** — the per-model cutoff for
+  `amazon.titan-embed-text-v2:0` is 0.30 PROVISIONAL: a single observed
+  true question scored exactly 0.30, with no margin and no false-positive
+  calibration. Before trusting 0.30, run the same 15-prompt protocol as
+  the Gemini calibration (unrelated / near-miss / true paraphrases over
+  the fixture registry) against live Titan embeddings and set the cutoff
+  from the measured unrelated ceiling / true floor. The 0.60 value for
+  all other models is the calibrated Gemini value; the Ollama default is
+  inherited, not calibrated.
+- **Bedrock history-replay live check** — the replayed-history shape
+  (list-form tool results, tool call → result → answer order) is
+  unit-tested only. Needs one live Bedrock turn after a tool call (the
+  reported 502 scenario) with AWS credentials to confirm end to end.
 - **`nomic-embed-text` install for live Ollama discovery** — Ollama
   capability discovery is test-only today (deterministic fake embeddings);
   the real embedding model is not installed in Rahul's Ollama.
@@ -78,6 +91,12 @@ can move.
   not built. Swagger/OpenAPI import exists.
 - **Recorded eval set for behavior changes** — planned (see
   `doc/agent-lifecycle.md`).
+- **Response-trimming guardrail change (done 2026-11-02)** — HTTP
+  capabilities can now opt in per capability to `max_results` up to 500
+  with `list_paths` / `keep: last` (see `doc/data-capabilities.md`).
+  Default stays 50 / keep first; the SQL 50-row cap is unchanged. Note
+  for future guardrail reviews: the 500 ceiling is a per-capability
+  opt-in, not a new default, and registry values are rejected at load.
 
 ## Observability (to review)
 
