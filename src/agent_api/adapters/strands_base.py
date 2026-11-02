@@ -22,9 +22,103 @@ from strands.tools.executors.concurrent import ConcurrentToolExecutor
 
 logger = logging.getLogger(__name__)
 
-from agent_api.domain.conversation import ASSISTANT, Conversation, ToolResult, Turn
+from agent_api.domain.conversation import ASSISTANT, USER, Conversation, ToolResult, Turn
 from agent_api.platform.retry import RetryPolicy, backoff_delay, call_with_retry
 from agent_api.ports.model_gateway import ModelGateway, ModelGatewayError, StreamChunk
+
+
+def build_history_messages(conversation: Conversation) -> list[dict]:
+    """Build the Strands/Bedrock message history for a stored conversation.
+
+    Pure function: no Strands/Bedrock imports or I/O, so it is unit-testable
+    on its own. The shape is the one Bedrock's Converse API requires, and it
+    is also valid for the other Strands providers (Gemini/Ollama) — there is
+    no provider-specific branching here:
+
+    * An assistant turn with tool results expands, in transcript order, to
+      an assistant message holding ONLY the ``toolUse`` blocks, then a user
+      message holding the ``toolResult`` blocks, then an assistant message
+      holding the answer text. The answer text never precedes the toolUse
+      blocks it followed in the real transcript.
+    * A ``toolResult`` block's ``content`` is a LIST of blocks
+      (``[{"text": ...}]``), never a bare ``{"text": ...}`` dict.
+    * ``toolUseId`` values are the synthetic ``seed-{turn}-{result}``
+      pairings, so each result pairs with its call; nothing is re-executed.
+    * Back-to-back messages from the same role are merged into one message
+      (Bedrock requires alternating roles), preserving block order.
+    * Empty turn text produces no text block. A toolResult block is always
+      emitted even for an empty result, so every toolUse stays paired.
+    * The history always starts with a user message: leading non-user
+      messages are dropped, and a dropped toolUse message takes its paired
+      toolResult blocks with it (an orphaned toolResult is invalid). No
+      user message is ever fabricated — a history with no user turn at
+      all yields an empty list.
+    """
+    messages: list[dict] = []
+
+    def append(role: str, blocks: list[dict]) -> None:
+        if not blocks:
+            return
+        if messages and messages[-1]["role"] == role:
+            messages[-1]["content"].extend(blocks)
+        else:
+            messages.append({"role": role, "content": list(blocks)})
+
+    for i, turn in enumerate(conversation.turns):
+        if turn.role == ASSISTANT and turn.tool_results:
+            append(
+                ASSISTANT,
+                [
+                    {
+                        "toolUse": {
+                            "toolUseId": f"seed-{i}-{j}",
+                            "name": result.tool,
+                            "input": {},
+                        }
+                    }
+                    for j, result in enumerate(turn.tool_results)
+                ],
+            )
+            append(
+                USER,
+                [
+                    {
+                        "toolResult": {
+                            "toolUseId": f"seed-{i}-{j}",
+                            "content": [{"text": result.result}],
+                        }
+                    }
+                    for j, result in enumerate(turn.tool_results)
+                ],
+            )
+            if turn.content:
+                append(ASSISTANT, [{"text": turn.content}])
+        elif turn.content:
+            append(turn.role, [{"text": turn.content}])
+
+    # Enforce the leading-user rule without fabricating anything. Each
+    # iteration drops at least one message, so this always terminates.
+    while messages:
+        first = messages[0]
+        if (
+            first["role"] == USER
+            and first["content"]
+            and not all("toolResult" in block for block in first["content"])
+        ):
+            break
+        had_tool_use = any("toolUse" in block for block in first["content"])
+        messages.pop(0)
+        if had_tool_use and messages and messages[0]["role"] == USER:
+            kept = [
+                block
+                for block in messages[0]["content"]
+                if "toolResult" not in block
+            ]
+            if kept:
+                messages[0]["content"] = kept
+            else:
+                messages.pop(0)
+    return messages
 
 
 class StrandsGatewayBase(ModelGateway):
@@ -65,46 +159,13 @@ class StrandsGatewayBase(ModelGateway):
     # -- shared mechanics ---------------------------------------------------
 
     def _build_agent(self, conversation: Conversation) -> Agent:
-        # Seed framework-natively: an assistant turn's tool calls become
-        # toolUse blocks, and their results become toolResult blocks in a
-        # following user-role message — the shape Strands itself produces
-        # mid-turn. Without this, the next turn could only see what the
-        # previous answer summarized, not what the tools actually returned.
-        # Synthetic toolUseIds pair each call with its result; they are
-        # history reconstruction, never re-executed.
-        messages = []
-        for i, turn in enumerate(conversation.turns):
-            if turn.role != ASSISTANT or not turn.tool_results:
-                messages.append(
-                    {"role": turn.role, "content": [{"text": turn.content}]}
-                )
-                continue
-            blocks: list[dict] = [{"text": turn.content}]
-            for j, result in enumerate(turn.tool_results):
-                blocks.append(
-                    {
-                        "toolUse": {
-                            "toolUseId": f"seed-{i}-{j}",
-                            "name": result.tool,
-                            "input": {},
-                        }
-                    }
-                )
-            messages.append({"role": turn.role, "content": blocks})
-            messages.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "toolResult": {
-                                "toolUseId": f"seed-{i}-{j}",
-                                "content": {"text": result.result},
-                            }
-                        }
-                        for j, result in enumerate(turn.tool_results)
-                    ],
-                }
-            )
+        # Seed framework-natively from the stored history; see
+        # build_history_messages for the Bedrock-valid shape (toolUse ->
+        # toolResult -> answer, list-form toolResult content, merged
+        # same-role messages, leading user message). Synthetic toolUseIds
+        # pair each call with its result; they are history reconstruction,
+        # never re-executed.
+        messages = build_history_messages(conversation)
         return Agent(
             model=self._build_model(),
             messages=messages,

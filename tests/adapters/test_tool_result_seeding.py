@@ -54,10 +54,23 @@ def test_strands_seeds_tool_use_and_tool_result_blocks(monkeypatch):
     probe = _StrandsProbe(tools=[], system_prompt="s", retry_policy=RetryPolicy())
     agent = probe._build_agent(_conv_with_results())
     messages = agent.kwargs["messages"]
+    # Bedrock-valid replay order: question -> toolUse only -> toolResult
+    # (list-form content) -> answer text.
+    assert len(messages) == 4
     assert messages[0] == {"role": USER, "content": [{"text": "what tier?"}]}
     assistant = messages[1]
-    assert assistant["role"] == ASSISTANT
-    assert {"text": "Gold tier"} in assistant["content"]
+    assert assistant == {
+        "role": ASSISTANT,
+        "content": [
+            {
+                "toolUse": {
+                    "toolUseId": "seed-1-0",
+                    "name": "execute_capability",
+                    "input": {},
+                }
+            }
+        ],
+    }
     use = [b["toolUse"] for b in assistant["content"] if "toolUse" in b]
     assert len(use) == 1 and use[0]["name"] == "execute_capability"
     results = messages[2]
@@ -65,16 +78,17 @@ def test_strands_seeds_tool_use_and_tool_result_blocks(monkeypatch):
     outcome = [b["toolResult"] for b in results["content"] if "toolResult" in b]
     assert len(outcome) == 1
     assert outcome[0]["toolUseId"] == use[0]["toolUseId"]
-    assert outcome[0]["content"] == {"text": '{"tier": "Gold"}'}
+    assert outcome[0]["content"] == [{"text": '{"tier": "Gold"}'}]
+    assert messages[3] == {"role": ASSISTANT, "content": [{"text": "Gold tier"}]}
 
 
 def test_strands_tool_results_extraction_pairs_in_order():
     agent = _CapturingAgent()
     agent.messages = [
         {"role": "assistant", "content": [{"toolUse": {"name": "execute_capability"}}]},
-        {"role": "user", "content": [{"toolResult": {"content": {"text": "R1"}}}]},
+        {"role": "user", "content": [{"toolResult": {"content": [{"text": "R1"}]}}]},
         {"role": "assistant", "content": [{"toolUse": {"name": "calculate"}}]},
-        {"role": "user", "content": [{"toolResult": {"content": {"text": "R2"}}}]},
+        {"role": "user", "content": [{"toolResult": {"content": [{"text": "R2"}]}}]},
     ]
     results = StrandsGatewayBase._tool_results(agent, skip=0)
     assert results == [
