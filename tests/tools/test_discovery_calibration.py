@@ -18,15 +18,23 @@ What the table shows:
 - Caveat: these constants are calibrated for gemini-embedding-001 on
   this registry. Another embedding provider's score scale differs and
   would need its own calibration pass before trusting the same numbers.
+  The threshold is therefore per-model (declared by each embedding
+  gateway); Titan v2's 0.30 is provisional — a single observed true
+  question, no false-positive calibration — and is not part of this
+  table.
 """
 
 from __future__ import annotations
 
 import json
+import math
 
 import pytest
 
+from agent_api.adapters.gemini_embedding_gateway import GeminiEmbeddingGateway
+from agent_api.adapters.ollama_embedding_gateway import OllamaEmbeddingGateway
 from agent_api.domain.capability import Capability, ParameterSpec
+from agent_api.ports.embedding_gateway import DEFAULT_SIMILARITY_THRESHOLD
 from agent_api.tools import ToolDeps
 from agent_api.tools.discover_capability import tool as discover_module
 from agent_api.tools.discover_capability.tool import create_tool as create_discover
@@ -71,9 +79,11 @@ _EXPECTED = {
 
 
 def _classify(sims: dict[str, float]) -> tuple[str, str | None]:
+    # Gemini path: the recorded similarities were measured with
+    # gemini-embedding-001, whose per-model threshold is the default.
     ranked = sorted(sims.items(), key=lambda kv: -kv[1])
     best, best_score = ranked[0]
-    if best_score < discover_module._SIMILARITY_THRESHOLD:
+    if best_score < DEFAULT_SIMILARITY_THRESHOLD:
         return "none", None
     if best_score - ranked[1][1] <= discover_module._MARGIN:
         return "ambiguous", None
@@ -81,8 +91,14 @@ def _classify(sims: dict[str, float]) -> tuple[str, str | None]:
 
 
 def test_calibrated_constants():
-    assert discover_module._SIMILARITY_THRESHOLD == 0.60
+    # Gemini path: the 0.60 threshold and δ = 0.05 margin still hold.
+    assert DEFAULT_SIMILARITY_THRESHOLD == 0.60
     assert discover_module._MARGIN == 0.05
+    assert GeminiEmbeddingGateway("key").similarity_threshold == 0.60
+    assert (
+        OllamaEmbeddingGateway("http://localhost:11434").similarity_threshold
+        == 0.60
+    )
 
 
 @pytest.mark.parametrize("prompt", sorted(_MEASURED))
@@ -101,6 +117,58 @@ def test_unrelated_prompts_would_have_passed_old_threshold():
     ):
         assert max(_MEASURED[prompt].values()) > 0.30
         assert max(_MEASURED[prompt].values()) < 0.60
+
+
+# --- Per-model threshold: the gateway declares the cutoff ---
+
+
+class _ThresholdEmbeddings:
+    """One capability + one query at cosine similarity 0.35: between
+    the Titan cutoff (0.30) and the default cutoff (0.60)."""
+
+    model_name = "threshold-test"
+
+    def __init__(self, threshold: float | None):
+        # None = legacy gateway predating the port extension: no
+        # similarity_threshold attribute at all.
+        if threshold is not None:
+            self.similarity_threshold = threshold
+
+    def embed(self, texts):
+        vectors = {
+            "alpha capability": [1.0, 0.0],
+            "need": [0.35, math.sqrt(1 - 0.35**2)],
+        }
+        return [vectors[t] for t in texts]
+
+    def ping(self):
+        return None
+
+
+def _threshold_tool(threshold: float | None):
+    deps = ToolDeps(
+        capability_registry=_FakeRegistry([_cap("a", "alpha capability")]),
+        embedding_gateway=_ThresholdEmbeddings(threshold),
+    )
+    return create_discover(deps)
+
+
+@pytest.mark.parametrize(
+    "threshold,expected_id",
+    [(0.30, "a"), (0.60, None)],
+)
+def test_gateway_threshold_decides_match(threshold, expected_id):
+    result = _threshold_tool(threshold)("need")
+    if expected_id is None:
+        assert "No data capability matches" in result
+    else:
+        assert json.loads(result)["id"] == expected_id
+
+
+def test_gateway_without_threshold_falls_back_to_default():
+    # A 0.35 score must not match under the 0.60 default.
+    result = _threshold_tool(None)("need")
+    assert "No data capability matches" in result
 
 
 # --- Functional margin / indexed-text behavior with a fake embedding ---
@@ -124,6 +192,7 @@ class _VectorEmbeddings:
     """Returns caller-supplied vectors keyed by exact text."""
 
     model_name = "test-vectors"
+    similarity_threshold = 0.60
 
     def __init__(self, vectors):
         self._vectors = vectors
@@ -198,6 +267,7 @@ def test_indexed_text_includes_parameter_descriptions():
 def test_fallback_strings_refuse_from_memory():
     class _BrokenEmbeddings:
         model_name = "broken"
+        similarity_threshold = 0.60
 
         def embed(self, texts):
             raise RuntimeError("down")

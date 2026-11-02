@@ -58,6 +58,7 @@ class FakeRegistry:
 
 class FakeEmbeddings:
     model_name = "fake-model"
+    similarity_threshold = 0.60
 
     def embed(self, texts):
         return [

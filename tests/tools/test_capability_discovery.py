@@ -86,6 +86,7 @@ class KeywordEmbeddingGateway:
     """
 
     model_name = "keyword-test"
+    similarity_threshold = 0.60
 
     _STOPWORDS = frozenset(
         "a an the is are was were what which how do does did me my "

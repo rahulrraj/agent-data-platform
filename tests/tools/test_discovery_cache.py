@@ -16,6 +16,7 @@ from agent_api.tools.discover_capability.tool import create_tool as create_disco
 
 class FakeEmbeddings:
     model_name = "test-model"
+    similarity_threshold = 0.60
 
     def __init__(self):
         self.calls: list[list[str]] = []

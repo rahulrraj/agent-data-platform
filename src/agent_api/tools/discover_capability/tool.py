@@ -9,13 +9,22 @@ deps.embedding_gateway; deps.embedding_cache is optional. Indexed texts
 are embedded once and cached: in memory per process, plus in the cache
 across restarts — only new or edited texts are re-embedded.
 
+The similarity threshold is per-model, not a single constant:
+cosine-similarity scales differ between embedding models, so the
+cutoff lives on the EmbeddingGateway port
+(`similarity_threshold`), declared by each adapter for its own
+model. The tool never branches on a provider or model name, and the
+composition root / Settings are not involved. The margin rule below
+is model-independent and unchanged.
+
 Calibration (gemini-embedding-001, 2026-10-25, 15 labeled prompts over
 the 5-capability fixture registry — paraphrases, near-miss distractors,
 unrelated prompts; see tests/tools/test_discovery_calibration.py):
 
 - Unrelated prompts score up to 0.53; the weakest true paraphrase
   scores 0.63. The old 0.30 threshold admitted unrelated prompts as
-  matches in dense-embedding space, so the threshold is 0.60.
+  matches in dense-embedding space, so the threshold is 0.60 for
+  this model.
 - True matches have best-minus-second-best margins >= 0.061; the
   ambiguous near-misses fall at <= 0.039. The margin rule is δ = 0.05:
   within δ, both top candidates are returned with scores and the model
@@ -24,6 +33,15 @@ unrelated prompts; see tests/tools/test_discovery_calibration.py):
 - Indexed text is description + parameter descriptions, not the
   description alone: phrasings that use parameter synonyms (order
   number, tracking) then match on the parameter text too.
+
+Titan (Bedrock amazon.titan-embed-text-v2:0) uses 0.30 — PROVISIONAL:
+that value comes from a SINGLE observed true question scoring exactly
+0.30, with no margin and no false-positive calibration (no
+unrelated/near-miss prompts measured for this model). A Titan
+calibration run using the same 15-prompt protocol as the Gemini
+calibration is still needed before trusting 0.30; see the comment at
+the value in adapters/bedrock_embedding_gateway.py. Every other
+model keeps the 0.60 default until it gets its own calibration.
 
 Fallbacks never invite answering from memory: every failure/no-match
 message ends with "say you cannot look it up".
@@ -39,8 +57,8 @@ from strands import tool
 
 from agent_api.domain.capability import cosine_similarity
 from agent_api.ports.embedding_cache import CachedEmbedding
+from agent_api.ports.embedding_gateway import DEFAULT_SIMILARITY_THRESHOLD
 
-_SIMILARITY_THRESHOLD = 0.60  # below this, report no match rather than guess
 _MARGIN = 0.05  # best minus second-best <= this -> return top 2 with scores
 
 
@@ -85,6 +103,14 @@ def create_tool(deps):
         raise RuntimeError(
             "discover_capability needs capability_registry and embedding_gateway"
         )
+    # Per-model cutoff, declared by the gateway (see module docstring).
+    # Gateways predating the port extension may not declare one; fall
+    # back to the default rather than failing discovery.
+    similarity_threshold = getattr(
+        embedding_gateway, "similarity_threshold", DEFAULT_SIMILARITY_THRESHOLD
+    )
+    if similarity_threshold is None:
+        similarity_threshold = DEFAULT_SIMILARITY_THRESHOLD
 
     # Indexed texts are embedded lazily on first use and cached: startup
     # must never block on the embedding backend (it may be down or
@@ -226,7 +252,7 @@ def create_tool(deps):
                 "embedding dimension mismatch. Say you cannot look it up."
             )
         best, best_score = scored[0]
-        if best_score < _SIMILARITY_THRESHOLD:
+        if best_score < similarity_threshold:
             return "No data capability matches that need. Say you cannot look it up."
         if discovered is not None:
             discovered.add(best.id)

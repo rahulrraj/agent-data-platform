@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from agent_api.platform.retry import RetryPolicy, call_with_retry
-from agent_api.ports.embedding_gateway import EmbeddingGatewayError
+from agent_api.ports.embedding_gateway import (
+    DEFAULT_SIMILARITY_THRESHOLD,
+    EmbeddingGatewayError,
+)
 
 
 class GeminiEmbeddingGateway:
@@ -22,6 +25,14 @@ class GeminiEmbeddingGateway:
     @property
     def model_name(self) -> str:
         return self._model_id
+
+    @property
+    def similarity_threshold(self) -> float:
+        # 0.60 is the value calibrated for gemini-embedding-001 (the
+        # default model); see tools/discover_capability/tool.py. A
+        # different model configured via model_id keeps the default
+        # until it gets its own calibration pass.
+        return DEFAULT_SIMILARITY_THRESHOLD
 
     @staticmethod
     def _is_transient(exc: Exception) -> bool:

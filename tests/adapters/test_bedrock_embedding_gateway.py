@@ -44,6 +44,22 @@ def test_model_name_default():
     )
 
 
+def test_similarity_threshold_titan_v2_is_provisional_0_30():
+    # Provisional: a single observed true question scoring 0.30, no
+    # margin and no false-positive calibration. See the comment at the
+    # value in the adapter; a Titan calibration run is still needed.
+    assert BedrockEmbeddingGateway("us-east-1").similarity_threshold == 0.30
+
+
+def test_similarity_threshold_other_model_uses_default():
+    assert (
+        BedrockEmbeddingGateway(
+            "us-east-1", model_id="amazon.titan-embed-text-v1"
+        ).similarity_threshold
+        == 0.60
+    )
+
+
 def test_embed_invokes_once_per_text(monkeypatch):
     gateway, client = _gateway_with_fake_client(monkeypatch)
     vectors = gateway.embed(["hello", "world"])

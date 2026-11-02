@@ -10,7 +10,12 @@ from __future__ import annotations
 import json
 
 from agent_api.platform.retry import RetryPolicy, call_with_retry
-from agent_api.ports.embedding_gateway import EmbeddingGatewayError
+from agent_api.ports.embedding_gateway import (
+    DEFAULT_SIMILARITY_THRESHOLD,
+    EmbeddingGatewayError,
+)
+
+_TITAN_EMBED_TEXT_V2 = "amazon.titan-embed-text-v2:0"
 
 # Same transient botocore codes as the Bedrock model gateway.
 _TRANSIENT_CODES = (
@@ -30,7 +35,7 @@ class BedrockEmbeddingGateway:
     def __init__(
         self,
         region_name: str,
-        model_id: str = "amazon.titan-embed-text-v2:0",
+        model_id: str = _TITAN_EMBED_TEXT_V2,
         retry_policy: RetryPolicy | None = None,
     ) -> None:
         self._region_name = region_name
@@ -40,6 +45,21 @@ class BedrockEmbeddingGateway:
     @property
     def model_name(self) -> str:
         return self._model_id
+
+    @property
+    def similarity_threshold(self) -> float:
+        if self._model_id == _TITAN_EMBED_TEXT_V2:
+            # PROVISIONAL VALUE — do not treat as calibrated. The 0.30
+            # cutoff comes from a SINGLE observed true question scoring
+            # exactly 0.30, with no margin and no false-positive
+            # calibration (no unrelated/near-miss prompts measured for
+            # this model). A Titan calibration run using the same
+            # 15-prompt protocol as the Gemini calibration is still
+            # needed before trusting 0.30; until then it only keeps a
+            # known-true question from being rejected. Any other
+            # Bedrock embedding model keeps the default cutoff.
+            return 0.30
+        return DEFAULT_SIMILARITY_THRESHOLD
 
     @staticmethod
     def _is_transient(exc: Exception) -> bool:

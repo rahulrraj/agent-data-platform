@@ -5,7 +5,10 @@ from __future__ import annotations
 import httpx
 
 from agent_api.platform.retry import RetryPolicy, call_with_retry
-from agent_api.ports.embedding_gateway import EmbeddingGatewayError
+from agent_api.ports.embedding_gateway import (
+    DEFAULT_SIMILARITY_THRESHOLD,
+    EmbeddingGatewayError,
+)
 
 
 class OllamaEmbeddingGateway:
@@ -24,6 +27,12 @@ class OllamaEmbeddingGateway:
     @property
     def model_name(self) -> str:
         return self._model_id
+
+    @property
+    def similarity_threshold(self) -> float:
+        # No per-model calibration for the Ollama embedding model: keep
+        # the default cutoff (the previous single threshold).
+        return DEFAULT_SIMILARITY_THRESHOLD
 
     @staticmethod
     def _is_transient(exc: Exception) -> bool:
