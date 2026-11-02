@@ -169,6 +169,10 @@ Tools are defined once as Strands `@tool` functions; the LangGraph adapter
 translates them to LangChain tools at the framework boundary. Embeddings stay
 on the provider path either way.
 
+The answering model can also vary per request: `ALLOWED_MODELS` maps
+caller-facing keys to `{provider, model}` and the request's optional `model`
+field selects one (ADR 0007). The framework does not vary per request.
+
 ## Resilience
 
 - Transient failures (dropped connections, 429/5xx) retry with exponential
@@ -287,6 +291,7 @@ Streaming facts, stated plainly:
 | AWS_REGION             | `us-east-1`              | AWS region for `bedrock` (or `AWS_REGION` env)       |
 | BEDROCK_MODEL_ID       | `us.anthropic.claude-sonnet-5-5` | Chat model for `bedrock` (cross-region profile) |
 | BEDROCK_EMBED_MODEL    | `amazon.titan-embed-text-v2:0` | Embedding model when provider is `bedrock`    |
+| ALLOWED_MODELS         | — (just the configured model) | JSON: per-request model allowlist, key → `{provider, model}` (ADR 0007) |
 | RETRY_MAX_ATTEMPTS     | `3`                      | Retry attempts for transient failures                |
 | RETRY_BASE_DELAY       | `0.5`                    | Base backoff delay in seconds (jittered)             |
 | CONVERSATION_STORE     | `memory`                 | `memory` (process-local), `sqlite`, or `postgres`        |
@@ -296,6 +301,20 @@ Streaming facts, stated plainly:
 | CAPABILITIES_PATH      | `registry/capabilities.yaml` | Data capability registry                         |
 | DATA_CONNECTIONS       | `{}`                     | JSON: named data-source connections (see below)      |
 | PORT                   | `8000`                   | API port                                             |
+
+`ALLOWED_MODELS` lets callers pick the answering model per request by key
+(ADR 0007): the request's optional `model` field names a key, `"default"`
+(or absent) means the configured provider + model, and unknown keys are a
+400. Only server-configured keys exist — callers can never supply a
+provider/model pair directly. The framework stays as configured and
+embeddings stay on the provider path; only the chat model switches. A key
+whose provider is incompatible with the configured framework (langgraph ×
+bedrock) fails startup. Example (keys are opaque names, not secrets):
+
+```json
+{"sonnet": {"provider": "bedrock", "model": "us.anthropic.claude-sonnet-5-5"},
+ "flash": {"provider": "gemini", "model": "gemini-flash-latest"}}
+```
 
 `DATA_CONNECTIONS` maps connection names (as referenced by the registry) to
 configs — secrets live here, never in the YAML:
@@ -310,12 +329,12 @@ configs — secrets live here, never in the YAML:
 
 | Method | Path         | Description                                                        |
 | ------ | ------------ | ------------------------------------------------------------------ |
-| GET    | /api/health  | `{"status": "ok", "model": ...}` (liveness)                        |
+| GET    | /api/health  | `{"status": "ok", "model": ..., "models": [...], "default_model": "default"}` (liveness) |
 | GET    | /api/ready   | `{"status": "ready"}` or 503 `{"status": "not_ready", ...}`         |
-| POST   | /api/ask     | `{message, session_id?}` → `{reply, tools_used, session_id}`        |
-| POST   | /api/chat    | Streams the reply as Server-Sent Events (text/tool/error chunks)   |
+| POST   | /api/ask     | `{message, session_id, model?}` → `{reply, tools_used, session_id}` — `model` is an `ALLOWED_MODELS` key (ADR 0007); absent means the configured model |
+| POST   | /api/chat    | Streams the reply as Server-Sent Events (text/tool/error chunks); same optional `model` field as `/api/ask` |
 
-Errors: invalid input → 400; model/data failure → 502 with a clean message.
+Errors: invalid input (including an unknown `model` key) → 400; model/data failure → 502 with a clean message.
 
 ## Project map
 
