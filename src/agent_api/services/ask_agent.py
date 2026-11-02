@@ -43,7 +43,12 @@ from agent_api.ports.conversation_repository import (
     ConversationRepositoryError,
 )
 from agent_api.ports.embedding_gateway import EmbeddingGateway, EmbeddingGatewayError
-from agent_api.ports.model_gateway import ModelGateway, ModelGatewayError, StreamChunk
+from agent_api.ports.model_gateway import (
+    ModelGateway,
+    ModelGatewayError,
+    ModelGatewayResolver,
+    StreamChunk,
+)
 
 # History window handed to the gateway: 40 turns = 20 exchanges. Large
 # enough for real follow-ups, small enough to stay inside small-model
@@ -78,22 +83,61 @@ class ReadinessReport:
 
 
 class AskAgentService:
-    """The 'ask the agent' use case."""
+    """The 'ask the agent' use case.
+
+    The chat model is resolved per call: either the single injected
+    gateway, or — when a gateway_resolver is wired (the composed app) —
+    the gateway for the requested allowlist key (ADR 0007). The
+    resolver owns the framework × provider matrix; this service only
+    knows the resolver contract and the key the caller asked for.
+    """
 
     def __init__(
         self,
-        gateway: ModelGateway,
-        conversations: ConversationRepository,
+        gateway: ModelGateway | None = None,
+        conversations: ConversationRepository | None = None,
         *,
         embedding_gateway: EmbeddingGateway | None = None,
         capability_registry: CapabilityRepository | None = None,
+        gateway_resolver: ModelGatewayResolver | None = None,
     ) -> None:
+        if gateway is None and gateway_resolver is None:
+            raise TypeError(
+                "AskAgentService needs a gateway or a gateway_resolver"
+            )
+        if conversations is None:
+            raise TypeError("AskAgentService needs a conversations repository")
         self._gateway = gateway
+        self._gateway_resolver = gateway_resolver
         self._conversations = conversations
         self._embedding_gateway = embedding_gateway
         self._capability_registry = capability_registry
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
+
+    # -- model resolution --------------------------------------------------
+
+    def _resolve_gateway(self, model: str | None) -> ModelGateway:
+        """The gateway for a requested model key.
+
+        None/"default" is the configured model. An unknown key is an
+        InvalidMessageError (400) listing the available keys — never a
+        guess, and never a caller-supplied provider/model pair.
+        """
+        if self._gateway_resolver is not None:
+            try:
+                return self._gateway_resolver.gateway_for(model)
+            except KeyError:
+                keys = ", ".join(self._gateway_resolver.available_keys)
+                raise InvalidMessageError(
+                    f"unknown model {model!r}; available models: {keys}"
+                ) from None
+        if model not in (None, "default"):
+            raise InvalidMessageError(
+                f"unknown model {model!r}; available models: default"
+            )
+        assert self._gateway is not None  # guaranteed by __init__
+        return self._gateway
 
     # -- session locking ---------------------------------------------------
 
@@ -136,15 +180,22 @@ class AskAgentService:
 
     # -- turns --------------------------------------------------------------
 
-    def ask(self, conversation_id: str, message: str) -> AgentReply:
-        """One full agentic turn; returns the reply and the tools it used."""
+    def ask(
+        self, conversation_id: str, message: str, model: str | None = None
+    ) -> AgentReply:
+        """One full agentic turn; returns the reply and the tools it used.
+
+        `model` is an allowlist key (ADR 0007); None means the
+        configured model.
+        """
         with self._session_lock(conversation_id):
             conversation = self._validated(conversation_id, message)
             # Persist the user turn before the gateway runs (see module
             # docstring): a gateway failure must not diverge backends.
             self._save(conversation)
             try:
-                turn = self._gateway.generate(self._gateway_conversation(conversation))
+                gateway = self._resolve_gateway(model)
+                turn = gateway.generate(self._gateway_conversation(conversation))
             except ModelGatewayError as exc:
                 raise AgentServiceError(str(exc)) from exc
             conversation.add_assistant(
@@ -154,9 +205,13 @@ class AskAgentService:
             return AgentReply(text=turn.content, tool_uses=turn.tool_uses)
 
     async def ask_stream(
-        self, conversation_id: str, message: str
+        self, conversation_id: str, message: str, model: str | None = None
     ) -> AsyncIterator[StreamChunk]:
-        """Same as ask(), but yields text/tool chunks as they arrive."""
+        """Same as ask(), but yields text/tool chunks as they arrive.
+
+        `model` is an allowlist key (ADR 0007); None means the
+        configured model.
+        """
         lock = self._session_lock(conversation_id)
         conversation: Conversation | None = None
         texts: list[str] = []
@@ -173,7 +228,8 @@ class AskAgentService:
                 conversation = self._validated(conversation_id, message)
                 self._save(conversation)  # user turn, before the gateway
                 try:
-                    async for chunk in self._gateway.stream(
+                    gateway = self._resolve_gateway(model)
+                    async for chunk in gateway.stream(
                         self._gateway_conversation(conversation)
                     ):
                         if chunk.kind == "text":
@@ -265,7 +321,16 @@ class AskAgentService:
         """
         failing: list[str] = []
         try:
-            self._gateway.ping()
+            # Readiness probes the configured (default) model; a lazy
+            # factory builds it here on first probe. Per-key gateways
+            # are probed by their first real call, not by readiness.
+            gateway = (
+                self._gateway_resolver.gateway_for(None)
+                if self._gateway_resolver is not None
+                else self._gateway
+            )
+            assert gateway is not None  # guaranteed by __init__
+            gateway.ping()
         except ModelGatewayError as exc:
             failing.append(f"model: {exc}")
         try:

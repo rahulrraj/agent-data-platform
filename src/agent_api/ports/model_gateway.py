@@ -39,3 +39,26 @@ class ModelGateway(Protocol):
         """Cheap reachability check; raise ModelGatewayError when the provider
         is down. Must not run inference (probes are frequent)."""
         ...
+
+
+class ModelGatewayResolver(Protocol):
+    """Resolves a per-request model key to a ModelGateway (ADR 0007).
+
+    Implemented by the composition root's factory; the service only
+    knows this contract, never the framework × provider matrix. Keys
+    are opaque allowlist keys (see Settings.allowed_models); ``None``
+    or ``"default"`` always means the configured provider + model.
+    Unknown keys raise KeyError — the service translates that into an
+    InvalidMessageError (400) listing the available keys.
+    """
+
+    @property
+    def available_keys(self) -> tuple[str, ...]:
+        """Caller-facing keys, with ``"default"`` first."""
+        ...
+
+    def gateway_for(self, key: str | None) -> ModelGateway:
+        """Return the gateway for `key`, building and caching it on first
+        use. Construction failures surface as ModelGatewayError (a
+        per-request 502), never as a startup error."""
+        ...

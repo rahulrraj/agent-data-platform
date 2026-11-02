@@ -35,6 +35,12 @@ class ChatRequest(BaseModel):
     # Required: no default. The UI always generates and sends one; direct
     # API clients must do the same (missing -> 422 from pydantic).
     session_id: str
+    # Optional allowlist key selecting the answering model (ADR 0007).
+    # Absent (or "default") means the configured provider + model.
+    # Unknown keys are a 400; embeddings are never dynamic — only the
+    # answering model switches. Arbitrary provider/model pairs are
+    # never accepted: only server-configured keys exist.
+    model: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -53,12 +59,15 @@ def create_app(
     service: AskAgentService,
     model_label: str,
     cors_origins: tuple[str, ...] | list[str] = (),
+    model_keys: tuple[str, ...] = ("default",),
 ) -> FastAPI:
     """Builds the FastAPI app with the use case injected.
 
     `cors_origins` comes from Settings (CORS_ORIGINS, comma-separated);
     empty means same-origin only — cross-origin browser access is
-    opt-in per deployment, never "*" by default.
+    opt-in per deployment, never "*" by default. `model_keys` lists the
+    caller-facing model keys from the composition root's allowlist
+    (ADR 0007); the health payload reports them additively.
     """
     app = FastAPI(title="Agent API")
 
@@ -71,7 +80,12 @@ def create_app(
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "model": model_label}
+        return {
+            "status": "ok",
+            "model": model_label,
+            "models": list(model_keys),
+            "default_model": "default",
+        }
 
     @app.get("/api/ready")
     def ready():
@@ -90,7 +104,7 @@ def create_app(
         # event loop (the old `async def` awaited nothing and stalled
         # /api/health, /api/ready and /api/chat for the whole turn).
         try:
-            reply = service.ask(req.session_id, req.message)
+            reply = service.ask(req.session_id, req.message, model=req.model)
         except AskAgentError as exc:
             raise _to_http_error(exc) from exc
         return ChatResponse(
@@ -101,7 +115,9 @@ def create_app(
     async def chat(req: ChatRequest):
         async def event_stream():
             try:
-                async for chunk in service.ask_stream(req.session_id, req.message):
+                async for chunk in service.ask_stream(
+                    req.session_id, req.message, model=req.model
+                ):
                     yield f"data: {json.dumps({'type': chunk.kind, 'payload': chunk.payload})}\n\n"
             except AskAgentError as exc:
                 status = 400 if isinstance(exc, InvalidMessageError) else 502

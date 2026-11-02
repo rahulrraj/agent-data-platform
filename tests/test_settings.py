@@ -101,3 +101,79 @@ def test_retry_max_delay_configurable(monkeypatch):
     assert Settings.from_env().retry_max_delay == 2.5  # default is 8.0, see below
     monkeypatch.delenv("RETRY_MAX_DELAY")
     assert Settings.from_env().retry_max_delay == 8.0
+
+
+# --- ADR 0007: ALLOWED_MODELS allowlist ---
+
+def test_allowed_models_unset_is_empty(monkeypatch):
+    monkeypatch.delenv("ALLOWED_MODELS", raising=False)
+    assert Settings.from_env().allowed_models == {}
+    monkeypatch.setenv("ALLOWED_MODELS", "  ")
+    assert Settings.from_env().allowed_models == {}
+
+
+def test_allowed_models_parsed(monkeypatch):
+    monkeypatch.setenv(
+        "ALLOWED_MODELS",
+        '{"sonnet": {"provider": "bedrock", "model": "us.anthropic.claude-sonnet-5-5"},'
+        ' "flash": {"provider": "gemini", "model": "gemini-flash-latest"}}',
+    )
+    allowed = Settings.from_env().allowed_models
+    assert allowed["sonnet"].provider == "bedrock"
+    assert allowed["sonnet"].model == "us.anthropic.claude-sonnet-5-5"
+    assert allowed["flash"].provider == "gemini"
+    assert allowed["flash"].model == "gemini-flash-latest"
+
+
+def test_allowed_models_bad_json_rejected(monkeypatch):
+    monkeypatch.setenv("ALLOWED_MODELS", "{not json")
+    with pytest.raises(ValueError, match="ALLOWED_MODELS"):
+        Settings.from_env()
+
+
+def test_allowed_models_must_be_an_object(monkeypatch):
+    monkeypatch.setenv("ALLOWED_MODELS", '[{"provider": "gemini"}]')
+    with pytest.raises(ValueError, match="ALLOWED_MODELS"):
+        Settings.from_env()
+
+
+def test_allowed_models_bad_provider_rejected(monkeypatch):
+    monkeypatch.setenv(
+        "ALLOWED_MODELS", '{"x": {"provider": "azure", "model": "gpt-4"}}'
+    )
+    with pytest.raises(ValueError, match="ALLOWED_MODELS"):
+        Settings.from_env()
+
+
+def test_allowed_models_empty_model_rejected(monkeypatch):
+    monkeypatch.setenv(
+        "ALLOWED_MODELS", '{"x": {"provider": "gemini", "model": ""}}'
+    )
+    with pytest.raises(ValueError, match="ALLOWED_MODELS"):
+        Settings.from_env()
+    monkeypatch.setenv("ALLOWED_MODELS", '{"x": {"provider": "gemini"}}')
+    with pytest.raises(ValueError, match="ALLOWED_MODELS"):
+        Settings.from_env()
+
+
+def test_allowed_models_reserved_default_key_rejected(monkeypatch):
+    monkeypatch.setenv(
+        "ALLOWED_MODELS",
+        '{"default": {"provider": "gemini", "model": "gemini-flash-latest"}}',
+    )
+    with pytest.raises(ValueError, match='reserved key "default"'):
+        Settings.from_env()
+
+
+def test_allowed_models_empty_key_rejected(monkeypatch):
+    monkeypatch.setenv(
+        "ALLOWED_MODELS", '{"": {"provider": "gemini", "model": "m"}}'
+    )
+    with pytest.raises(ValueError, match="ALLOWED_MODELS"):
+        Settings.from_env()
+
+
+def test_allowed_models_non_object_entry_rejected(monkeypatch):
+    monkeypatch.setenv("ALLOWED_MODELS", '{"x": "gemini-flash-latest"}')
+    with pytest.raises(ValueError, match="ALLOWED_MODELS"):
+        Settings.from_env()

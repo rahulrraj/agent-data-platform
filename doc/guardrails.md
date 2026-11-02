@@ -49,7 +49,7 @@ honest: ✅ enforced in code · 🟡 partial/documented · ❌ planned, not buil
 
 | Guardrail | Status | Notes |
 | --- | --- | --- |
-| Tests per layer (arch doc §9) | ✅ | 280 backend tests green, 4 skipped (2026-11-02; update this row in the same commit as any suite change) |
+| Tests per layer (arch doc §9) | ✅ | 311 backend tests green, 4 skipped (2026-11-02; update this row in the same commit as any suite change) |
 | ADRs for architectural decisions | ✅ | `doc/adr/` |
 | Approvals for gated changes | ✅ | `doc/approvals.md` |
 | No invented scope/content | ✅ | Build what was asked; proposals before commits |

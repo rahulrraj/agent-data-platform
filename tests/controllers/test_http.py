@@ -20,15 +20,22 @@ class FakeService(AskAgentService):
     def __init__(self, reply: AgentReply | None = None, error: Exception | None = None):
         self.reply = reply or AgentReply(text="hello back", tool_uses=("calculate",))
         self.error = error
+        self.last_model = "unset"
 
-    def ask(self, conversation_id: str, message: str) -> AgentReply:
+    def ask(
+        self, conversation_id: str, message: str, model: str | None = None
+    ) -> AgentReply:
+        self.last_model = model
         if self.error:
             raise self.error
         if not message.strip():
             raise InvalidMessageError("message is required")
         return self.reply
 
-    async def ask_stream(self, conversation_id: str, message: str):
+    async def ask_stream(
+        self, conversation_id: str, message: str, model: str | None = None
+    ):
+        self.last_model = model
         if self.error:
             raise self.error
         if not message.strip():
@@ -54,7 +61,27 @@ def make_client(**kwargs) -> TestClient:
 def test_health():
     r = make_client().get("/api/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok", "model": "test:model"}
+    assert r.json() == {
+        "status": "ok",
+        "model": "test:model",
+        "models": ["default"],
+        "default_model": "default",
+    }
+
+
+def test_health_lists_configured_model_keys():
+    # ADR 0007: health reports the allowlist keys additively; the
+    # existing `model` label field is unchanged for the UI pill.
+    app = create_app(
+        FakeService(), model_label="test:model",
+        model_keys=("default", "sonnet", "flash"),
+    )
+    r = TestClient(app).get("/api/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["model"] == "test:model"
+    assert body["models"] == ["default", "sonnet", "flash"]
+    assert body["default_model"] == "default"
 
 
 def test_ask_ok():
@@ -103,6 +130,63 @@ def test_ready_not_ready_is_503():
     body = r.json()
     assert body["status"] == "not_ready"
     assert body["failing"] == ["model: down"]
+
+
+# --- ADR 0007: per-request model selection ---
+
+def test_ask_passes_model_key_to_service():
+    service = FakeService()
+    client = TestClient(create_app(service, model_label="test:model"))
+    r = client.post(
+        "/api/ask", json={"message": "hi", "session_id": "s", "model": "sonnet"}
+    )
+    assert r.status_code == 200
+    assert service.last_model == "sonnet"
+
+
+def test_ask_absent_model_means_default():
+    service = FakeService()
+    client = TestClient(create_app(service, model_label="test:model"))
+    r = client.post("/api/ask", json={"message": "hi", "session_id": "s"})
+    assert r.status_code == 200
+    assert service.last_model is None
+
+
+def test_ask_unknown_model_key_is_400():
+    # The service raises InvalidMessageError for unknown keys; the
+    # controller maps it to 400 with the available keys in the detail.
+    client = make_client(
+        error=InvalidMessageError(
+            "unknown model 'nope'; available models: default, sonnet"
+        )
+    )
+    r = client.post(
+        "/api/ask", json={"message": "hi", "session_id": "s", "model": "nope"}
+    )
+    assert r.status_code == 400
+    assert "available models: default, sonnet" in r.json()["detail"]
+
+
+def test_chat_passes_model_key_to_service():
+    service = FakeService()
+    client = TestClient(create_app(service, model_label="test:model"))
+    r = client.post(
+        "/api/chat", json={"message": "hi", "session_id": "s", "model": "flash"}
+    )
+    assert r.status_code == 200
+    assert service.last_model == "flash"
+
+
+def test_chat_unknown_model_key_yields_400_error_event():
+    client = make_client(
+        error=InvalidMessageError("unknown model 'nope'; available models: default")
+    )
+    r = client.post(
+        "/api/chat", json={"message": "hi", "session_id": "s", "model": "nope"}
+    )
+    assert r.status_code == 200  # SSE carries the error as an event
+    assert '"type": "error"' in r.text
+    assert '"status": 400' in r.text
 
 
 # --- M-18 / M-6 / C-1 / M-17 additions ---
@@ -158,7 +242,7 @@ def test_reset_session_endpoint():
     service = _ResetService()
     from fastapi.testclient import TestClient as _TC
 
-    client = _TC(create_app(service, model_label="test:model"))
+    client = TestClient(create_app(service, model_label="test:model"))
     r = client.delete("/api/sessions/s1")
     assert r.status_code == 200
     assert r.json() == {"status": "reset", "session_id": "s1"}

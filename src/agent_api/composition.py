@@ -7,10 +7,14 @@ entrypoint over `build_app()`; `controllers/lambda_handler.py` imports
 controllers <-> composition cycle (previously the Lambda handler imported
 `main`, which imported `controllers.http`).
 
-Gateway classes are imported lazily inside `build_gateway()`, after the
-proxy strip below: the `ollama` package builds an HTTP client at import
+Gateway classes are imported lazily inside `_build_gateway_for()`, after
+the proxy strip below: the `ollama` package builds an HTTP client at import
 time, and importing it before the strip would crash on broken proxy env
 vars (see ADR 0005). Nothing else in this module needs lazy imports.
+
+Per-request model selection (ADR 0007) lives here too: `ModelGatewayFactory`
+lazily builds and caches one gateway per allowlist key, so the service
+resolves the gateway per call without ever knowing the matrix.
 """
 
 from __future__ import annotations
@@ -38,7 +42,7 @@ from agent_api.controllers.http import create_app
 from agent_api.domain.prompts import build_system_prompt
 from agent_api.platform.retry import RetryPolicy
 from agent_api.ports.conversation_repository import ConversationRepository
-from agent_api.ports.model_gateway import ModelGateway
+from agent_api.ports.model_gateway import ModelGateway, ModelGatewayError
 from agent_api.services.ask_agent import AskAgentService
 from agent_api.tools import ToolDeps, load_tools, tool_names
 
@@ -116,18 +120,15 @@ def _embedding_gateway(settings: Settings, retry_policy: RetryPolicy):
     )
 
 
-def build_gateway(
-    settings: Settings,
-    retry_policy: RetryPolicy,
-    tools: list,
-    system_prompt: str,
-) -> ModelGateway:
-    """Pick the gateway from the framework × provider matrix.
+def _gateway_class(framework: str, provider: str):
+    """The framework × provider matrix (ADR 0003). Only the composition
+    root knows it; the service just sees a ModelGateway.
 
-    Only the composition root knows the matrix; the service just sees a
-    ModelGateway.
+    The imports are lazy and follow the proxy strip (see module
+    docstring); calling this at startup for validation is safe because
+    the strip runs first and is idempotent.
     """
-    if settings.framework == "langgraph" and settings.provider == "bedrock":
+    if framework == "langgraph" and provider == "bedrock":
         raise RuntimeError(
             "LangGraph + Bedrock is not built yet (Strands only for bedrock)."
         )
@@ -139,33 +140,148 @@ def build_gateway(
     from agent_api.adapters.langgraph_ollama_gateway import LangGraphOllamaGateway
     from agent_api.adapters.ollama_model_gateway import OllamaModelGateway
 
-    gateway_class = {
+    return {
         ("strands", "ollama"): OllamaModelGateway,
         ("strands", "gemini"): GeminiModelGateway,
         ("strands", "bedrock"): BedrockModelGateway,
         ("langgraph", "ollama"): LangGraphOllamaGateway,
         ("langgraph", "gemini"): LangGraphGeminiGateway,
-    }[(settings.framework, settings.provider)]
-    if settings.provider == "gemini" and not settings.gemini_api_key:
-        raise RuntimeError(
-            "GEMINI_API_KEY is not set. Get a free key at "
-            "https://aistudio.google.com/apikey and export GEMINI_API_KEY=<key>"
-        )
-    kwargs: dict = {}
-    if settings.provider == "gemini":
-        kwargs = {"api_key": settings.gemini_api_key,
-                  "model_id": settings.gemini_model}
-    elif settings.provider == "bedrock":
-        kwargs = {"region_name": settings.aws_region,
-                  "model_id": settings.bedrock_model}
+    }[(framework, provider)]
+
+
+def _build_gateway_for(
+    framework: str,
+    provider: str,
+    model_id: str,
+    settings: Settings,
+    retry_policy: RetryPolicy,
+    tools: list,
+    system_prompt: str,
+) -> ModelGateway:
+    """Construct one gateway for a (framework, provider, model) triple.
+
+    Construction is cheap and side-effect-free (adapters build their
+    model object per turn); missing credentials are NOT validated here
+    — the first call surfaces them as ModelGatewayError (a per-request
+    502), so a listed provider without credentials never fails startup.
+    Construction failures (e.g. a missing provider SDK) are translated
+    to ModelGatewayError for the same reason.
+    """
+    gateway_class = _gateway_class(framework, provider)
+    if provider == "gemini":
+        kwargs = {"api_key": settings.gemini_api_key, "model_id": model_id}
+    elif provider == "bedrock":
+        kwargs = {"region_name": settings.aws_region, "model_id": model_id}
     else:
-        kwargs = {"host": settings.ollama_host, "model_id": settings.ollama_model}
-    return gateway_class(
-        tools=tools,
-        system_prompt=system_prompt,
-        retry_policy=retry_policy,
-        **kwargs,
-    )
+        kwargs = {"host": settings.ollama_host, "model_id": model_id}
+    try:
+        return gateway_class(
+            tools=tools,
+            system_prompt=system_prompt,
+            retry_policy=retry_policy,
+            **kwargs,
+        )
+    except ModelGatewayError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — construction failure is a provider failure
+        raise ModelGatewayError(
+            f"{provider} gateway could not be built: {exc}"
+        ) from exc
+
+
+class ModelGatewayFactory:
+    """Lazily builds and caches one gateway per allowlist key (ADR 0007).
+
+    The framework stays as configured; only the provider + model vary
+    per key. Framework × provider incompatibilities (langgraph ×
+    bedrock) are rejected here, at startup, for every key — never at
+    request time. Gateways build a fresh agent per turn internally, so
+    sharing one cached gateway object per key across requests mirrors
+    the previous single-shared-gateway behavior.
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        retry_policy: RetryPolicy,
+        tools: list,
+        system_prompt: str,
+    ) -> None:
+        self._settings = settings
+        self._retry_policy = retry_policy
+        self._tools = tools
+        self._system_prompt = system_prompt
+        self._cache: dict[str, ModelGateway] = {}
+        # Startup validation: every resolvable (framework, provider)
+        # pair must exist in the matrix before any request arrives.
+        _gateway_class(settings.framework, settings.provider)
+        for key, choice in settings.allowed_models.items():
+            try:
+                _gateway_class(settings.framework, choice.provider)
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f"ALLOWED_MODELS[{key!r}]: {exc}"
+                ) from exc
+
+    @property
+    def available_keys(self) -> tuple[str, ...]:
+        """Caller-facing keys, with "default" first."""
+        return ("default",) + tuple(self._settings.allowed_models)
+
+    def _default_model(self) -> str:
+        return {
+            "ollama": self._settings.ollama_model,
+            "gemini": self._settings.gemini_model,
+            "bedrock": self._settings.bedrock_model,
+        }[self._settings.provider]
+
+    def gateway_for(self, key: str | None) -> ModelGateway:
+        """Return the cached gateway for `key`; build it on first use.
+
+        None or "default" resolves to the configured provider + model.
+        Unknown keys raise KeyError (the service turns that into a 400
+        listing the available keys).
+        """
+        if key is None or key == "default":
+            cache_key, provider, model = (
+                "default",
+                self._settings.provider,
+                self._default_model(),
+            )
+        else:
+            choice = self._settings.allowed_models.get(key)
+            if choice is None:
+                raise KeyError(key)
+            cache_key, provider, model = key, choice.provider, choice.model
+        if cache_key not in self._cache:
+            self._cache[cache_key] = _build_gateway_for(
+                self._settings.framework,
+                provider,
+                model,
+                self._settings,
+                self._retry_policy,
+                self._tools,
+                self._system_prompt,
+            )
+        return self._cache[cache_key]
+
+
+def build_gateway(
+    settings: Settings,
+    retry_policy: RetryPolicy,
+    tools: list,
+    system_prompt: str,
+) -> ModelGateway:
+    """Build the configured (default) gateway immediately.
+
+    Backward-compatible entry point for the single-model wiring; the
+    composed app uses ModelGatewayFactory instead. Missing credentials
+    are no longer a startup error here either — the first call surfaces
+    them as ModelGatewayError.
+    """
+    return ModelGatewayFactory(
+        settings, retry_policy, tools, system_prompt
+    ).gateway_for("default")
 
 
 def build_repository(settings: Settings) -> ConversationRepository:
@@ -217,15 +333,21 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     deps = build_tool_deps(settings, retry_policy)
     tools = load_tools(deps)
     system_prompt = build_system_prompt(tool_names(tools))
-    gateway = build_gateway(settings, retry_policy, tools, system_prompt)
+    # No gateway is built here: the factory builds (and caches) one per
+    # allowlist key on first use, so a listed provider without
+    # credentials never fails startup — the first request for that key
+    # surfaces it as a 502. Embeddings stay on the configured provider
+    # path regardless of the per-request chat model (ADR 0007).
+    factory = ModelGatewayFactory(settings, retry_policy, tools, system_prompt)
     conversations = build_repository(settings)
     service = AskAgentService(
-        gateway=gateway,
         conversations=conversations,
+        gateway_resolver=factory,
         embedding_gateway=deps.embedding_gateway,
         capability_registry=deps.capability_registry,
     )
     return create_app(
         service, model_label=model_label(settings),
         cors_origins=settings.cors_origins,
+        model_keys=factory.available_keys,
     )

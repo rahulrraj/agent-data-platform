@@ -41,10 +41,70 @@ def _parse_float(name: str, raw: str, *, minimum: float | None = None) -> float:
     return value
 
 
+def _parse_allowed_models(raw: str) -> dict[str, ModelChoice]:
+    """Parse ALLOWED_MODELS: a JSON object of key -> {provider, model}.
+
+    Unset or blank means "no per-request models": the allowlist is just
+    the configured model, addressed as ``"default"``. Validation fails
+    at startup (this is the only place that reads the variable): an
+    unknown provider, an empty model id, an empty key, or the reserved
+    ``"default"`` key are all startup errors, never per-request ones.
+    JSON objects enforce key uniqueness, so duplicate keys cannot occur.
+    """
+    if not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"ALLOWED_MODELS is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("ALLOWED_MODELS must be a JSON object mapping keys to {provider, model}")
+    choices: dict[str, ModelChoice] = {}
+    for key, value in parsed.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError("ALLOWED_MODELS keys must be non-empty strings")
+        if key == "default":
+            raise ValueError(
+                'ALLOWED_MODELS must not contain the reserved key "default"'
+            )
+        if not isinstance(value, dict):
+            raise ValueError(
+                f"ALLOWED_MODELS[{key!r}] must be an object with provider and model"
+            )
+        provider = value.get("provider")
+        if provider not in ("ollama", "gemini", "bedrock"):
+            raise ValueError(
+                f"ALLOWED_MODELS[{key!r}] provider must be 'ollama', 'gemini' "
+                f"or 'bedrock', got {provider!r}"
+            )
+        model = value.get("model")
+        if not isinstance(model, str) or not model:
+            raise ValueError(
+                f"ALLOWED_MODELS[{key!r}] model must be a non-empty string"
+            )
+        choices[key] = ModelChoice(provider=provider, model=model)
+    return choices
+
+
+@dataclass(frozen=True)
+class ModelChoice:
+    """One server-allowlisted per-request model (ADR 0007).
+
+    Keys are opaque: callers send the key, never a provider/model pair,
+    so the allowlist — not the caller — decides which models exist and
+    what they cost. The key ``"default"`` is reserved and always means
+    the configured provider + model.
+    """
+
+    provider: str  # "ollama" | "gemini" | "bedrock"
+    model: str  # provider-specific model id, non-empty
+
+
 @dataclass(frozen=True)
 class Settings:
     provider: str  # "ollama" | "gemini" | "bedrock"
     framework: str  # "strands" | "langgraph"
+    allowed_models: dict[str, ModelChoice]  # ALLOWED_MODELS allowlist, keyed by caller-facing key
     ollama_host: str
     ollama_model: str
     gemini_model: str
@@ -93,9 +153,13 @@ class Settings:
             raise ValueError(f"DATA_CONNECTIONS is not valid JSON: {exc}") from exc
         if not isinstance(data_connections, dict):
             raise ValueError("DATA_CONNECTIONS must be a JSON object")
+        allowed_models = _parse_allowed_models(
+            os.environ.get("ALLOWED_MODELS", "")
+        )
         return cls(
             provider=provider,
             framework=framework,
+            allowed_models=allowed_models,
             ollama_host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
             ollama_model=os.environ.get("OLLAMA_MODEL", "qwen2.5:1.5b"),
             gemini_model=os.environ.get("GEMINI_MODEL", "gemini-flash-latest"),

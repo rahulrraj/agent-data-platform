@@ -397,6 +397,107 @@ async def _collect(service, session_id="s1", message="hi"):
     return [c async for c in service.ask_stream(session_id, message)]
 
 
+# --- ADR 0007: per-request model selection ---
+
+class FakeResolver:
+    """Stand-in for the composition root's ModelGatewayFactory."""
+
+    def __init__(self, gateways: dict):
+        self._gateways = gateways
+
+    @property
+    def available_keys(self) -> tuple[str, ...]:
+        return tuple(self._gateways)
+
+    def gateway_for(self, key: str | None):
+        resolved = "default" if key in (None, "default") else key
+        if resolved not in self._gateways:
+            raise KeyError(key)
+        return self._gateways[resolved]
+
+
+def _resolver_service():
+    default = FakeGateway(reply="default reply")
+    fast = FakeGateway(reply="fast reply", tools=())
+    repo = FakeRepository()
+    resolver = FakeResolver({"default": default, "fast": fast})
+    service = AskAgentService(
+        conversations=repo, gateway_resolver=resolver
+    )
+    return service, default, fast, repo
+
+
+def test_ask_uses_requested_model_gateway():
+    service, default, fast, _ = _resolver_service()
+    assert service.ask("s1", "hi", model="fast").text == "fast reply"
+    assert fast.seen and not default.seen
+
+
+def test_ask_absent_model_uses_default_gateway():
+    service, default, fast, _ = _resolver_service()
+    assert service.ask("s1", "hi").text == "default reply"
+    assert service.ask("s1", "hi", model="default").text == "default reply"
+    assert len(default.seen) == 2 and not fast.seen
+
+
+def test_ask_unknown_model_key_is_invalid_message():
+    service, default, fast, repo = _resolver_service()
+    with pytest.raises(InvalidMessageError, match="available models: default, fast"):
+        service.ask("s1", "hi", model="nope")
+    assert not default.seen and not fast.seen
+    # The user turn was still saved before resolution (same rule as a
+    # gateway failure: history must not diverge by failure mode).
+    assert [t.content for t in repo.load("s1").turns] == ["hi"]
+
+
+def test_ask_stream_uses_requested_model_gateway():
+    import asyncio
+
+    service, _, fast, _ = _resolver_service()
+    chunks = asyncio.run(
+        _collect_stream(service, model="fast")
+    )
+    assert [c.payload for c in chunks if c.kind == "text"] == ["fast reply"]
+    assert fast.seen
+
+
+async def _collect_stream(service, model=None):
+    return [c async for c in service.ask_stream("s1", "hi", model=model)]
+
+
+def test_ask_stream_unknown_model_key_is_invalid_message():
+    import asyncio
+
+    service, _, _, _ = _resolver_service()
+
+    async def collect():
+        async for _ in service.ask_stream("s1", "hi", model="nope"):
+            pass
+
+    with pytest.raises(InvalidMessageError, match="available models"):
+        asyncio.run(collect())
+
+
+def test_single_gateway_service_rejects_non_default_model():
+    service, _, _ = make_service()
+    with pytest.raises(InvalidMessageError, match="available models: default"):
+        service.ask("s1", "hi", model="sonnet")
+
+
+def test_resolver_service_readiness_pings_default_gateway():
+    service, default, _, _ = _resolver_service()
+    assert service.readiness().ready
+    default.fail = True
+    report = service.readiness()
+    assert not report.ready
+    assert report.failing == ("model: boom",)
+
+
+def test_service_needs_gateway_or_resolver():
+    with pytest.raises(TypeError):
+        AskAgentService(conversations=FakeRepository())
+
+
 def test_stream_tool_chunks_deduped_by_name():
     # Nit: a gateway that reports the same tool twice in one turn
     # used to stream the tool chunk twice (saved history deduped).

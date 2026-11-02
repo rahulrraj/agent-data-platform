@@ -31,14 +31,18 @@ class FakeService(AskAgentService):
         self.reply = reply or AgentReply(text="hello back", tool_uses=("calculate",))
         self.error = error
 
-    def ask(self, conversation_id: str, message: str) -> AgentReply:
+    def ask(
+        self, conversation_id: str, message: str, model: str | None = None
+    ) -> AgentReply:
         if self.error:
             raise self.error
         if not message.strip():
             raise InvalidMessageError("message is required")
         return self.reply
 
-    async def ask_stream(self, conversation_id: str, message: str):
+    async def ask_stream(
+        self, conversation_id: str, message: str, model: str | None = None
+    ):
         if self.error:
             raise self.error
         if not message.strip():
@@ -109,7 +113,12 @@ def call_lambda(method: str, path: str, body: dict | None = None, **service_kwar
 def test_health():
     r = call_lambda("GET", "/api/health")
     assert r["statusCode"] == 200
-    assert json.loads(r["body"]) == {"status": "ok", "model": "test:model"}
+    assert json.loads(r["body"]) == {
+        "status": "ok",
+        "model": "test:model",
+        "models": ["default"],
+        "default_model": "default",
+    }
 
 
 def test_ask_ok():
