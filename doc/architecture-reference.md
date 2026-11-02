@@ -464,7 +464,10 @@ rows with a `truncated` flag.
       failed-coercion error; reject unknown parameters outright.
 - [ ] Apply the same result cap to every executor kind (truncate lists
       to 50 with a `truncated` flag; apply `fields` trimming to list
-      items as well as dicts) and document the cap per kind.
+      items as well as dicts) and document the cap per kind. (HTTP
+      capabilities may opt in per capability to 500 with `list_paths` /
+      `keep` — see `doc/data-capabilities.md`; the 50 default and the SQL
+      cap are unchanged.)
 - [ ] Enforce a margin rule on discovery (see §4.3) rather than
       returning a single best match with no confidence signal.
 

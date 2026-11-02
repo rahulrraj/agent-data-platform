@@ -19,7 +19,7 @@ honest: ✅ enforced in code · 🟡 partial/documented · ❌ planned, not buil
 | Data only via capability registry | ✅ | Model supplies parameter *values*; queries/URLs are fixed in YAML |
 | `mode: read` enforced | ✅ | Executors refuse anything else |
 | Parameter validation | ✅ | Required, types, unknown params rejected — clean errors, never tracebacks; safe string values coerced (`"123"` → `123`, `"true"` → `true`) |
-| 50-row cap + `truncated` flag | ✅ | Per execution, for SQL rows and HTTP list results |
+| 50-row cap + `truncated` flag (HTTP opt-in to 500) | ✅ | Per execution, for SQL rows and HTTP list results; an HTTP capability may opt in, per capability, to a cap up to 500 and nested-list trimming via `list_paths` / `keep`, validated at registry load — SQL stays at 50 |
 | Minimal columns | ✅ | Registry declares only needed fields |
 | Secrets out of the repo | ✅ | Connections live in `DATA_CONNECTIONS` (env JSON), never in YAML |
 | Per-user authorization | 🟡 | Documented: the agent acts with the service's permissions; per-user scoping (`allowed_roles`) is planned |
@@ -49,7 +49,7 @@ honest: ✅ enforced in code · 🟡 partial/documented · ❌ planned, not buil
 
 | Guardrail | Status | Notes |
 | --- | --- | --- |
-| Tests per layer (arch doc §9) | ✅ | 216 backend tests green, 4 skipped (2026-10-25; update this row in the same commit as any suite change) |
+| Tests per layer (arch doc §9) | ✅ | 280 backend tests green, 4 skipped (2026-11-02; update this row in the same commit as any suite change) |
 | ADRs for architectural decisions | ✅ | `doc/adr/` |
 | Approvals for gated changes | ✅ | `doc/approvals.md` |
 | No invented scope/content | ✅ | Build what was asked; proposals before commits |

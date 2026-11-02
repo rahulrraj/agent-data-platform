@@ -10,11 +10,21 @@ from pathlib import Path
 
 import yaml
 
-from agent_api.domain.capability import Capability, ParameterSpec
+from agent_api.domain.capability import (
+    DEFAULT_MAX_RESULTS,
+    MAX_MAX_RESULTS,
+    Capability,
+    ParameterSpec,
+)
 from agent_api.ports.capability_repository import CapabilityRepositoryError
 
 
-_META_KEYS = {"id", "description", "kind", "connection", "mode", "parameters"}
+_META_KEYS = {
+    "id", "description", "kind", "connection", "mode", "parameters",
+    # Result-trimming settings: top-level registry keys, carried on the
+    # Capability itself (not in spec) — see doc/data-capabilities.md.
+    "list_paths", "keep", "max_results",
+}
 
 # m-18 / m-15: load-time allowlists. A typo'd kind, mode, or parameter
 # type used to deploy green and fail only on first execution; now the
@@ -98,6 +108,40 @@ class YamlCapabilityRepository:
                     )
                 )
             spec = {k: v for k, v in entry.items() if k not in _META_KEYS}
+            # Result-trimming settings (HTTP executors only; validated
+            # here at load for every kind so a typo fails fast at
+            # startup, like the kind/mode/type allowlists above).
+            # The Capability constructor re-checks the same invariants;
+            # these checks name the registry entry, as the others do.
+            list_paths = entry.get("list_paths", [])
+            if isinstance(list_paths, str) or not isinstance(list_paths, list):
+                raise ValueError(
+                    f"capability {cap_id!r}: 'list_paths' must be a list "
+                    f"of non-empty strings (got {list_paths!r})"
+                )
+            for path in list_paths:
+                if not isinstance(path, str) or not path:
+                    raise ValueError(
+                        f"capability {cap_id!r}: 'list_paths' must be a "
+                        f"list of non-empty strings (got {path!r})"
+                    )
+            keep = entry.get("keep", "first")
+            if keep not in ("first", "last"):
+                raise ValueError(
+                    f"capability {cap_id!r}: 'keep' must be 'first' or "
+                    f"'last' (got {keep!r})"
+                )
+            max_results = entry.get("max_results", DEFAULT_MAX_RESULTS)
+            if isinstance(max_results, bool) or not isinstance(max_results, int):
+                raise ValueError(
+                    f"capability {cap_id!r}: 'max_results' must be an "
+                    f"integer (got {max_results!r})"
+                )
+            if not 1 <= max_results <= MAX_MAX_RESULTS:
+                raise ValueError(
+                    f"capability {cap_id!r}: 'max_results' must be between "
+                    f"1 and {MAX_MAX_RESULTS} (got {max_results})"
+                )
             if entry["kind"] in ("snowflake", "sqlserver"):
                 if not spec.get("query"):
                     raise ValueError(
@@ -125,6 +169,9 @@ class YamlCapabilityRepository:
                 mode=mode,
                 parameters=tuple(params_list),
                 spec=spec,
+                list_paths=tuple(list_paths),
+                keep=keep,
+                max_results=max_results,
             )
             if cap.id in capabilities:
                 raise ValueError(f"duplicate capability id: {cap.id}")

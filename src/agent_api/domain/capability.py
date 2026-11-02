@@ -11,6 +11,15 @@ import math
 from dataclasses import dataclass, field
 
 
+# Result-trimming defaults for HTTP capabilities (see
+# doc/data-capabilities.md): lists are capped at 50 by default, mirroring
+# the SQL row cap; a capability may opt in to a higher cap, up to 500.
+# The SQL cap is unchanged and unaffected by these settings.
+DEFAULT_MAX_RESULTS = 50
+MAX_MAX_RESULTS = 500
+_KEEP_VALUES = frozenset({"first", "last"})
+
+
 @dataclass(frozen=True)
 class ParameterSpec:
     """One named parameter a capability accepts."""
@@ -32,6 +41,51 @@ class Capability:
     mode: str  # "read" — executors refuse anything else
     parameters: tuple[ParameterSpec, ...] = ()
     spec: dict = field(default_factory=dict)  # kind-specific: query | request
+    # Result trimming (HTTP executors only; the SQL row cap is separate
+    # and unchanged). `list_paths` names dotted paths to nested lists
+    # inside a dict response; when empty, the top-level list is trimmed
+    # instead. `keep` selects which end of a list survives trimming.
+    list_paths: tuple[str, ...] = ()
+    keep: str = "first"  # "first" | "last"
+    max_results: int = DEFAULT_MAX_RESULTS  # 1..MAX_MAX_RESULTS
+
+    def __post_init__(self) -> None:
+        # Domain invariant, enforced wherever a Capability is built;
+        # the registry loader validates first with entry-named errors.
+        # A list is accepted here and normalised to a tuple (the
+        # registry loader passes a tuple; direct callers may pass a list).
+        if isinstance(self.list_paths, list):
+            object.__setattr__(self, "list_paths", tuple(self.list_paths))
+        if isinstance(self.list_paths, str) or not isinstance(
+            self.list_paths, tuple
+        ):
+            raise ValueError(
+                f"capability {self.id!r}: 'list_paths' must be a list of "
+                f"non-empty strings (got {self.list_paths!r})"
+            )
+        for path in self.list_paths:
+            if not isinstance(path, str) or not path:
+                raise ValueError(
+                    f"capability {self.id!r}: 'list_paths' must be a list "
+                    f"of non-empty strings (got {path!r})"
+                )
+        if self.keep not in _KEEP_VALUES:
+            raise ValueError(
+                f"capability {self.id!r}: 'keep' must be 'first' or 'last' "
+                f"(got {self.keep!r})"
+            )
+        if isinstance(self.max_results, bool) or not isinstance(
+            self.max_results, int
+        ):
+            raise ValueError(
+                f"capability {self.id!r}: 'max_results' must be an integer "
+                f"(got {self.max_results!r})"
+            )
+        if not 1 <= self.max_results <= MAX_MAX_RESULTS:
+            raise ValueError(
+                f"capability {self.id!r}: 'max_results' must be between 1 "
+                f"and {MAX_MAX_RESULTS} (got {self.max_results})"
+            )
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:

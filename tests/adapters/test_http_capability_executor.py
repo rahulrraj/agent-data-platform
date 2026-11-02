@@ -322,3 +322,163 @@ def test_malformed_path_template_not_missing_parameter(monkeypatch):
     with pytest.raises(CapabilityExecutorError, match="invalid path template"):
         executor.execute(cap, {})
     assert client.calls == 0
+
+# --- Per-capability result trimming: list_paths / keep / max_results ---
+
+
+def _trim_cap(**overrides):
+    kwargs = {
+        "id": "prices",
+        "description": "x",
+        "kind": "http",
+        "connection": "orders_api",
+        "mode": "read",
+        "parameters": (),
+        "spec": {"request": {"method": "GET", "path": "/prices"}},
+    }
+    kwargs.update(overrides)
+    return Capability(**kwargs)
+
+
+def test_nested_path_trimmed_with_default_first_50(monkeypatch):
+    payload = {
+        "symbol": "ACME",
+        "history": {"prices": list(range(60)), "other": [1, 2]},
+    }
+    executor = _raw_executor(monkeypatch, _RawResponse(200, "x", payload))
+    cap = _trim_cap(list_paths=["history.prices"])
+    result = executor.execute(cap, {})
+    assert result["truncated"] is True
+    assert result["data"]["history"]["prices"] == list(range(50))
+    # Untouched siblings survive, including a shorter nested list.
+    assert result["data"]["symbol"] == "ACME"
+    assert result["data"]["history"]["other"] == [1, 2]
+    # Registry defaults: first 50, cap 50.
+    assert (cap.list_paths, cap.keep, cap.max_results) == (
+        ("history.prices",), "first", 50,
+    )
+
+
+def test_keep_last_keeps_most_recent_rows_nested(monkeypatch):
+    payload = {"history": {"prices": list(range(60))}}
+    executor = _raw_executor(monkeypatch, _RawResponse(200, "x", payload))
+    result = executor.execute(
+        _trim_cap(list_paths=["history.prices"], keep="last"), {}
+    )
+    assert result["truncated"] is True
+    assert result["data"]["history"]["prices"] == list(range(10, 60))
+
+
+def test_keep_first_vs_last_on_top_level_list(monkeypatch):
+    payload = list(range(60))
+    first = _raw_executor(monkeypatch, _RawResponse(200, "x", payload))
+    assert first.execute(_trim_cap(keep="first"), {}) == {
+        "data": list(range(50)), "truncated": True,
+    }
+    last = _raw_executor(monkeypatch, _RawResponse(200, "x", list(range(60))))
+    assert last.execute(_trim_cap(keep="last"), {}) == {
+        "data": list(range(10, 60)), "truncated": True,
+    }
+
+
+def test_default_behavior_unchanged_short_list_not_truncated(monkeypatch):
+    payload = list(range(40))
+    executor = _raw_executor(monkeypatch, _RawResponse(200, "x", payload))
+    cap = _trim_cap()
+    assert (cap.list_paths, cap.keep, cap.max_results) == ((), "first", 50)
+    assert executor.execute(cap, {}) == {"data": list(range(40)), "truncated": False}
+
+
+def test_max_results_opt_in_up_to_500(monkeypatch):
+    payload = {"history": {"prices": list(range(120))}}
+    executor = _raw_executor(monkeypatch, _RawResponse(200, "x", payload))
+    result = executor.execute(
+        _trim_cap(list_paths=["history.prices"], max_results=200), {}
+    )
+    assert result["truncated"] is False
+    assert result["data"]["history"]["prices"] == list(range(120))
+
+    payload = {"history": {"prices": list(range(600))}}
+    executor = _raw_executor(monkeypatch, _RawResponse(200, "x", payload))
+    result = executor.execute(
+        _trim_cap(list_paths=["history.prices"], max_results=500), {}
+    )
+    assert result["truncated"] is True
+    assert result["data"]["history"]["prices"] == list(range(500))
+
+
+def test_truncated_flag_when_nothing_trimmed_is_false_but_present(monkeypatch):
+    payload = {"history": {"prices": list(range(30))}}
+    executor = _raw_executor(monkeypatch, _RawResponse(200, "x", payload))
+    result = executor.execute(_trim_cap(list_paths=["history.prices"]), {})
+    assert result == {"data": payload, "truncated": False}
+
+
+def test_trimming_at_any_of_multiple_paths_sets_truncated(monkeypatch):
+    payload = {
+        "a": {"items": list(range(60))},
+        "b": {"items": list(range(10))},
+    }
+    executor = _raw_executor(monkeypatch, _RawResponse(200, "x", payload))
+    result = executor.execute(
+        _trim_cap(list_paths=["a.items", "b.items"], keep="last"), {}
+    )
+    assert result["truncated"] is True
+    assert result["data"]["a"]["items"] == list(range(10, 60))
+    assert result["data"]["b"]["items"] == list(range(10))
+
+
+def test_unresolvable_paths_left_untouched(monkeypatch):
+    payload = {
+        "history": {"prices": list(range(60)), "note": "text"},
+        "scalar": 7,
+    }
+    executor = _raw_executor(monkeypatch, _RawResponse(200, "x", payload))
+    result = executor.execute(
+        _trim_cap(
+            list_paths=[
+                "missing.items",       # missing key
+                "history.note.items",  # non-dict intermediate
+                "scalar",              # non-list terminal
+                "history.prices",      # resolves: must still trim
+            ]
+        ),
+        {},
+    )
+    assert result["truncated"] is True
+    assert result["data"]["history"]["prices"] == list(range(50))
+    assert result["data"]["history"]["note"] == "text"
+    assert result["data"]["scalar"] == 7
+
+    # Only unresolvable paths: nothing trimmed, flag present and false.
+    payload = {"history": {"prices": list(range(60))}}
+    executor = _raw_executor(monkeypatch, _RawResponse(200, "x", payload))
+    result = executor.execute(_trim_cap(list_paths=["missing.items"]), {})
+    assert result == {"data": payload, "truncated": False}
+
+
+def test_top_level_list_still_capped_when_list_paths_set(monkeypatch):
+    # list_paths only resolve inside dict payloads; a list root is
+    # never left uncapped by a registry entry naming nested paths.
+    payload = list(range(60))
+    executor = _raw_executor(monkeypatch, _RawResponse(200, "x", payload))
+    result = executor.execute(_trim_cap(list_paths=["history.prices"]), {})
+    assert result == {"data": list(range(50)), "truncated": True}
+
+
+def test_fields_does_not_reach_nested_lists(monkeypatch):
+    payload = {
+        "history": {"prices": [{"close": i, "volume": i} for i in range(60)]},
+        "extra": "dropped",
+    }
+    cap = _trim_cap(
+        list_paths=["history.prices"],
+        spec={"request": {"method": "GET", "path": "/prices",
+                          "fields": ["history"]}},
+    )
+    executor = _raw_executor(monkeypatch, _RawResponse(200, "x", payload))
+    result = executor.execute(cap, {})
+    assert result["truncated"] is True
+    assert result["data"] == {
+        "history": {"prices": [{"close": i, "volume": i} for i in range(50)]}
+    }

@@ -153,3 +153,85 @@ def test_unknown_parameter_type_rejected_at_load(tmp_path):
         required: true
     request: {method: GET, path: "/a"}
 """)
+
+# --- Result-trimming settings: load-time validation ---
+
+_TRIM_ENTRY_HEAD = """  - id: x
+    description: "x"
+    kind: http
+    connection: c
+"""
+
+
+def _trim_entry(tmp_path, extra_yaml):
+    return _load_entry(tmp_path, _TRIM_ENTRY_HEAD + extra_yaml + """    request: {method: GET, path: "/a"}
+""")
+
+
+def test_trimming_settings_parsed_and_not_in_spec(tmp_path):
+    repo = _trim_entry(
+        tmp_path,
+        """    list_paths: ["history.prices", "series"]
+    keep: last
+    max_results: 200
+""",
+    )
+    cap = repo.get("x")
+    assert cap.list_paths == ("history.prices", "series")
+    assert cap.keep == "last"
+    assert cap.max_results == 200
+    assert "list_paths" not in cap.spec
+    assert "keep" not in cap.spec
+    assert "max_results" not in cap.spec
+    assert cap.spec["request"]["path"] == "/a"
+
+
+def test_trimming_settings_defaults(tmp_path):
+    repo = _trim_entry(tmp_path, "")
+    cap = repo.get("x")
+    assert cap.list_paths == ()
+    assert cap.keep == "first"
+    assert cap.max_results == 50
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "501", "600"])
+def test_max_results_out_of_range_rejected_at_load(tmp_path, value):
+    with pytest.raises(CapabilityRepositoryError, match="max_results"):
+        _trim_entry(tmp_path, f"    max_results: {value}\n")
+
+
+@pytest.mark.parametrize(
+    "value", ['"100"', "50.5", "true", "[100]", "{n: 100}"]
+)
+def test_max_results_wrong_type_rejected_at_load(tmp_path, value):
+    with pytest.raises(CapabilityRepositoryError, match="max_results"):
+        _trim_entry(tmp_path, f"    max_results: {value}\n")
+
+
+@pytest.mark.parametrize("value", ['"newest"', '"LAST"', '"First"', "123", "true"])
+def test_keep_rejected_at_load(tmp_path, value):
+    with pytest.raises(CapabilityRepositoryError, match="'keep'"):
+        _trim_entry(tmp_path, f"    keep: {value}\n")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        '"history.prices"',  # a bare string, not a list
+        "42",
+        "[\"\"]",  # empty-string entry
+        "[123]",
+        "[history.prices, \"\"]",
+        "[history.prices, 7]",
+        "{a: 1}",
+    ],
+)
+def test_list_paths_rejected_at_load(tmp_path, value):
+    with pytest.raises(CapabilityRepositoryError, match="list_paths"):
+        _trim_entry(tmp_path, f"    list_paths: {value}\n")
+
+
+def test_max_results_boundaries_accepted(tmp_path):
+    for value in ("1", "500"):
+        repo = _trim_entry(tmp_path, f"    max_results: {value}\n")
+        assert repo.get("x").max_results == int(value)

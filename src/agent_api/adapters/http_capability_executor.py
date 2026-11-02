@@ -10,13 +10,22 @@ Registry `request` spec:
     multi_segment_params: [param_name]  # optional: path params allowed to
         contain "/" (default: a "/" in a path value is refused)
 
+Per-capability trimming settings live on the Capability (top-level
+registry keys, validated at load): `list_paths`, `keep`, `max_results`.
+See doc/data-capabilities.md. Defaults: cap 50, keep the first rows.
+`keep: last` keeps the most recent rows (time-series responses).
+The opt-in ceiling is 500; the SQL path's 50-row cap is separate
+and unchanged.
+
 GET: params not used in the path become query-string params.
 POST: params become the JSON body.
 
 Connection targets are validated at construction (m-4): https-only,
 no loopback/private/reserved hosts unless the connection opts in with
-allow_private_base_url (local dev). List results are capped at 50 with
-a `truncated` flag, mirroring the SQL path (m-14).
+allow_private_base_url (local dev). List results are capped (default 50,
+opt-in to 500 per capability) with a `truncated` flag, mirroring the
+SQL path's cap (m-14); nested lists named by `list_paths` are capped
+the same way.
 
 Read-only enforcement: `mode: read` allows GET only. A POST under
 `mode: read` is refused here even though the HTTP executor supports POST
@@ -78,8 +87,6 @@ class HttpStatusError(Exception):
 
 class HttpCapabilityExecutor(CapabilityExecutor):
     """CapabilityExecutor calling REST APIs."""
-
-    max_results = 50  # m-14: same cap as the SQL path (sql_base.max_rows)
 
     def __init__(self, connections: dict, retry_policy: RetryPolicy) -> None:
         self._connections = connections
@@ -151,6 +158,57 @@ class HttpCapabilityExecutor(CapabilityExecutor):
             return True
         status = getattr(exc, "status_code", None)
         return status == 429 or (isinstance(status, int) and 500 <= status < 600)
+
+    @staticmethod
+    def _trim_list(items: list, keep: str, max_results: int) -> tuple[list, bool]:
+        """Cap one list per the capability's trimming settings.
+
+        Returns (trimmed_items, was_trimmed). `keep: last` keeps the
+        tail (most recent rows); anything else keeps the head, as
+        before. A list already within the cap is returned unchanged
+        (same object) with was_trimmed False.
+        """
+        if len(items) <= max_results:
+            return items, False
+        if keep == "last":
+            return items[-max_results:], True
+        return items[:max_results], True
+
+    @classmethod
+    def _trim_at_paths(
+        cls, data: dict, list_paths: tuple[str, ...], keep: str, max_results: int
+    ) -> bool:
+        """Cap each nested list named by a dotted path in `data`.
+
+        A path is a "."-separated chain of dict keys from the response
+        root (e.g. "history.prices"). A path that does not resolve —
+        a missing key, a non-dict intermediate, or a non-list at the
+        end — is left untouched: the registry may name a list the
+        upstream only sometimes returns, and that is not an execution
+        failure. The parsed response object is mutated in place (it
+        is single-use, fresh from response.json()). Returns True if
+        any list was trimmed.
+        """
+        trimmed_any = False
+        for path in list_paths:
+            segments = path.split(".")
+            parent: object = data
+            resolved = True
+            for segment in segments[:-1]:
+                if not isinstance(parent, dict):
+                    resolved = False
+                    break
+                parent = parent.get(segment)
+            if not resolved or not isinstance(parent, dict):
+                continue
+            value = parent.get(segments[-1])
+            if not isinstance(value, list):
+                continue
+            trimmed, was_trimmed = cls._trim_list(value, keep, max_results)
+            if was_trimmed:
+                trimmed_any = True
+                parent[segments[-1]] = trimmed
+        return trimmed_any
 
     def execute(self, capability: Capability, params: dict) -> dict:
         if capability.mode != "read":
@@ -281,9 +339,13 @@ class HttpCapabilityExecutor(CapabilityExecutor):
             return {"data": body_text}
         fields = request.get("fields")
         if isinstance(data, list):
-            # m-14: lists get the same cap as SQL rows, and `fields`
-            # trims list items too (previously it trimmed only dicts,
-            # so a list of thousands of objects entered context whole).
+            # m-14: lists get the cap (default 50, opt-in to 500 per
+            # capability), and `fields` trims list items too
+            # (previously it trimmed only dicts, so a list of
+            # thousands of objects entered context whole). A
+            # top-level list is capped whether or not `list_paths`
+            # are set: list_paths only resolve inside dict payloads,
+            # so the top-level list is never left uncapped.
             items = data
             if fields:
                 items = [
@@ -291,8 +353,27 @@ class HttpCapabilityExecutor(CapabilityExecutor):
                     if isinstance(item, dict) else item
                     for item in items
                 ]
-            truncated = len(items) > self.max_results
-            return {"data": items[: self.max_results], "truncated": truncated}
-        if fields and isinstance(data, dict):
-            data = {k: data.get(k) for k in fields}
+            trimmed, truncated = self._trim_list(
+                items, capability.keep, capability.max_results
+            )
+            return {"data": trimmed, "truncated": truncated}
+        if isinstance(data, dict):
+            truncated = False
+            if capability.list_paths:
+                # Nested lists are capped before `fields` filtering,
+                # so the allowlist still decides which keys survive.
+                truncated = self._trim_at_paths(
+                    data, capability.list_paths,
+                    capability.keep, capability.max_results,
+                )
+            if fields:
+                data = {k: data.get(k) for k in fields}
+            if capability.list_paths:
+                # With nested trimming configured the flag is always
+                # reported, so the model can tell a capped nested
+                # list from a complete one.
+                return {"data": data, "truncated": truncated}
+            return {"data": data}
+        if capability.list_paths:
+            return {"data": data, "truncated": False}
         return {"data": data}

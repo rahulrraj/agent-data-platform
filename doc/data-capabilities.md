@@ -55,14 +55,59 @@ Kind-specific `spec` keys:
 
 HTTP semantics: `GET` puts params not used in the path on the query string;
 `POST` sends params as the JSON body. `fields` trims dict responses and
-dict items inside list responses; list results are capped at 50 with a
-`truncated` flag, mirroring the SQL row cap. A 204/empty body yields
-`{"data": null}` and a non-JSON 200 body is returned as text, not a crash.
+dict items inside list responses; list results are capped at 50 by
+default with a `truncated` flag, mirroring the SQL row cap. A 204/empty
+body yields `{"data": null}` and a non-JSON 200 body is returned as text,
+not a crash.
 Path parameter values are percent-encoded, and a `/` in a value is refused
 unless the capability opts that parameter into `multi_segment_params`.
 Connection targets are validated at executor construction: `base_url`
 must be https and must not be a loopback/private/reserved host unless the
 connection opts in with `allow_private_base_url` (local dev only).
+
+### Trimming large HTTP responses
+
+Three optional top-level registry keys control how list results are
+trimmed before they enter the model's context (HTTP capabilities only;
+the SQL row cap stays at 50 and is unaffected):
+
+```yaml
+  - id: price_history
+    description: "Daily closing prices for a symbol, most recent first"
+    kind: http
+    connection: market_api
+    list_paths: ["history.prices"]  # dotted paths to nested lists
+    keep: last                      # first | last (default: first)
+    max_results: 200                # 1..500 (default: 50)
+    request:
+      method: GET
+      path: "/prices/{symbol}"
+```
+
+- `list_paths`: dotted chains of dict keys from the response root to a
+  nested list (e.g. a time-series list inside the payload). Trimming
+  applies at each listed path. When no paths are given, the top-level
+  list is trimmed instead, as before; a top-level list is always
+  capped. A path that does not resolve (missing key, non-dict
+  intermediate, non-list at the end) is left untouched, not an error.
+- `keep`: `first` keeps the oldest rows (the default, preserving
+  current behavior); `last` keeps the most recent rows — the
+  time-series case, where the newest data matters most.
+- `max_results`: the cap applied at each trimmed list. The default is
+  50; a capability may opt in to a higher cap, up to 500. The 500
+  ceiling is an opt-in per capability, not a new default.
+
+`truncated` is true whenever anything was trimmed — at the top level
+or at any listed path. When `list_paths` are configured, the flag is
+always present on the result (even when nothing was trimmed); for a
+plain dict response without `list_paths` it is omitted, as before.
+`fields` does not reach nested lists: it trims only the top-level dict
+or top-level list items.
+
+Invalid values are rejected when the registry loads (fail fast at
+startup, naming the capability): `max_results` outside 1..500 or not an
+integer, `keep` other than `first`/`last`, or `list_paths` not a list of
+non-empty strings.
 
 ## Connections
 
@@ -179,7 +224,10 @@ execution returns a clean error message — never a traceback.
 - **Minimal fields.** Select only what the answer needs — results enter the
   model's context window.
 - **Row caps.** SQL executors return at most 50 rows and flag `truncated`;
-  HTTP list results get the same cap and flag.
+  HTTP list results get the same 50 default and flag, and an HTTP
+  capability may opt in (per capability, validated at registry load) to
+  a cap up to 500 and to trimming nested lists via `list_paths` /
+  `keep: last` — see "Trimming large HTTP responses" above.
 - **Retries.** Executors retry transient failures (connection drops,
   429/5xx) with backoff; bad SQL / 4xx fail fast.
 - **Least-privilege credentials.** Service accounts should be read-only and
