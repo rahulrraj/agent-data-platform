@@ -2,11 +2,23 @@
 
 **Status:** accepted
 **Date:** 2026-10-21
-**Context:** the agent loop is currently Strands-only. LangGraph is worth
+
+## Contents
+
+- [Context](#context)
+- [Decision](#decision)
+- [Rationale](#rationale)
+- [Consequences](#consequences)
+
+## Context
+
+the agent loop is currently Strands-only. LangGraph is worth
 evaluating (richer ecosystem: interrupts, human-in-the-loop, Studio), and the
 user wants to switch frameworks at any point via config.
 
-**Decision:** support both frameworks behind the unchanged `ModelGateway`
+## Decision
+
+support both frameworks behind the unchanged `ModelGateway`
 port.
 
 - Framework = the agent loop (Strands `Agent` vs LangGraph ReAct agent).
@@ -20,19 +32,21 @@ port.
   `LangGraphGatewayBase` translates each into a LangChain `StructuredTool`
   (name, description, JSON schema from the Strands tool spec) at wiring
   time. No tool is rewritten per framework.
-- `main.py` resolves the framework × provider matrix from `AGENT_FRAMEWORK`
+- the composition root resolves the framework × provider matrix from `AGENT_FRAMEWORK`
   × `AGENT_MODEL_PROVIDER`. The service only ever sees a `ModelGateway`.
 - LangGraph runs stateless per call (no checkpointer), matching the Strands
   side; history stays owned by the `ConversationRepository`.
 
-**Rationale:**
+## Rationale
+
 - The port made this cheap: the framework is an adapter detail, so trying
   LangGraph is a spike, not a commitment. If it doesn't earn its place, two
   files get deleted.
 - Keeping both switchable costs little (the matrix is resolved in one place)
   and lets real workloads decide.
 
-**Consequences:**
+## Consequences
+
 - New dependencies: `langchain`, `langgraph`, `langchain-core`,
   `langchain-ollama`, `langchain-google-genai`.
 - Two runtimes to keep in behavioral parity — each framework gets its own

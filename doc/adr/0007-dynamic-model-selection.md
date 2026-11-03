@@ -2,6 +2,12 @@
 
 Date: 2026-11-02
 
+## Contents
+
+- [Context](#context)
+- [Decision](#decision)
+- [Consequences](#consequences)
+
 ## Context
 
 The API wired exactly one chat model at startup (the framework ×

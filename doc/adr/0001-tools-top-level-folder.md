@@ -2,15 +2,29 @@
 
 **Status:** accepted
 **Date:** 2026-10-21
-**Context:** `doc/hexagonal-architecture.md` §11 (placement test) would put
+
+## Contents
+
+- [Context](#context)
+- [Decision](#decision)
+- [Rationale](#rationale)
+- [Consequences](#consequences)
+- [Amendment (2026-10-25, code review m-48)](#amendment-2026-10-25-code-review-m-48)
+
+## Context
+
+`doc/hexagonal-architecture.md` §11 (placement test) would put
 technology-independent tool functions in `domain/`, and §2 says not to invent
 categories.
 
-**Decision:** tools live in a top-level `tools/` package
+## Decision
+
+tools live in a top-level `tools/` package
 (`src/agent_api/tools/<name>/tool.py`), auto-discovered, instead of
 `domain/plugins/`.
 
-**Rationale:**
+## Rationale
+
 - The reference's own Agent profile (§13) names **model / tool / memory** as
   the agent's peer building blocks. Model and memory already live outside
   domain (adapters, ports); tools are the agent's third peer, not just
@@ -18,14 +32,18 @@ categories.
 - Predictability (the doc's governing principle): a contributor adding a
   tool looks for `tools/` first. `domain/plugins/` required knowing the
   classification rationale.
-- Dependency direction is unchanged: adapters and `main.py` import from
+- Dependency direction is unchanged: adapters and the composition root import from
   `tools/`; `tools/` imports nothing from the app. If a future tool needs
   outbound I/O, it goes through a core-owned port (§4), same as before.
 
-**Consequences:** one more top-level folder than the default structure;
+## Consequences
+
+one more top-level folder than the default structure;
 placement documented here instead of silently diverging.
 
-**Amendment (2026-10-25, code review m-48):** the original "tools/
+## Amendment (2026-10-25, code review m-48)
+
+The original "tools/
 imports nothing from the app" sentence is stale. Bare tool functions
 still import nothing, but factory plugins (`create_tool(deps)`) import
 `domain.capability` and the port types they receive via `ToolDeps` —

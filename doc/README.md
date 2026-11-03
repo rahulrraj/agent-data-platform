@@ -1,8 +1,17 @@
 # Documentation index
 
 Every document in this repo, in one place. Each document below also
-carries its own `Contents` section at the top, except the short ADRs
-(0001–0007), which are short enough to read straight through.
+carries its own `Contents` section at the top.
+
+## Contents
+
+- [Start here](#start-here)
+- [Architecture and principles](#architecture-and-principles)
+- [Data capabilities](#data-capabilities)
+- [Lifecycle, guardrails, approvals](#lifecycle-guardrails-approvals)
+- [Decision records](#decision-records)
+- [Frontend and infrastructure](#frontend-and-infrastructure)
+- [Review record](#review-record)
 
 ## Start here
 
@@ -61,4 +70,4 @@ carries its own `Contents` section at the top, except the short ADRs
 
 | Document | What it is |
 | --- | --- |
-| [`code-review-2026-10-24.md`](code-review-2026-10-24.md) | Multi-agent code review (8 Critical, 31 Major, 48 Minor). Frozen record of the review as delivered — intentionally uncommitted; do not edit. |
+| [`code-review-2026-10-24.md`](code-review-2026-10-24.md) | Multi-agent code review (8 Critical, 31 Major, 48 Minor). Frozen record of the review as delivered — a `Contents` section was added for navigation; the findings themselves are unedited. Intentionally uncommitted. |

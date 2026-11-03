@@ -2,6 +2,12 @@
 
 Date: 2026-10-25
 
+## Contents
+
+- [Context](#context)
+- [Decision](#decision)
+- [Consequences](#consequences)
+
 ## Context
 
 ADR 0003 sanctions one shared base per agent framework

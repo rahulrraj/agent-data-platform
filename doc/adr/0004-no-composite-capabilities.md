@@ -3,6 +3,12 @@
 Date: 2026-10-21
 Status: Accepted
 
+## Contents
+
+- [Context](#context)
+- [Decision](#decision)
+- [Consequences](#consequences)
+
 ## Context
 
 For a question like "returns of all accounts of a customer", the agent must

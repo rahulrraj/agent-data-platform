@@ -430,7 +430,7 @@ doc/
 ## Docs
 
 Full index: [`doc/README.md`](doc/README.md). Every document carries its
-own `Contents` section at the top, except the short ADRs.
+own `Contents` section at the top.
 
 | Doc | What it is |
 | --- | ---------- |
