@@ -73,3 +73,19 @@ def test_list_paths_list_normalised_to_tuple():
 def test_invalid_trimming_settings_rejected(kwargs):
     with pytest.raises(ValueError):
         _cap(**kwargs)
+
+
+# --- Token forwarding (ADR 0008) ---
+
+def test_forward_user_token_defaults_false():
+    assert _cap().forward_user_token is False
+
+
+def test_forward_user_token_true_accepted():
+    assert _cap(forward_user_token=True).forward_user_token is True
+
+
+@pytest.mark.parametrize("value", ["true", "yes", 1, 0, None, ["true"]])
+def test_forward_user_token_non_bool_rejected(value):
+    with pytest.raises(ValueError, match="forward_user_token"):
+        _cap(forward_user_token=value)

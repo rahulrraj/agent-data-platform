@@ -24,6 +24,9 @@ _META_KEYS = {
     # Result-trimming settings: top-level registry keys, carried on the
     # Capability itself (not in spec) — see doc/data-capabilities.md.
     "list_paths", "keep", "max_results",
+    # Token forwarding (ADR 0008): likewise a top-level key carried on
+    # the Capability, not in spec.
+    "forward_user_token",
 }
 
 # m-18 / m-15: load-time allowlists. A typo'd kind, mode, or parameter
@@ -142,6 +145,18 @@ class YamlCapabilityRepository:
                     f"capability {cap_id!r}: 'max_results' must be between "
                     f"1 and {MAX_MAX_RESULTS} (got {max_results})"
                 )
+            # Token forwarding (ADR 0008): validated here at load for
+            # every kind, like the trimming settings above, so a typo
+            # fails fast at startup. It is HTTP-only in effect — SQL
+            # executors never read the field and keep service
+            # credentials only; the value is still carried on the
+            # Capability for every kind.
+            forward_user_token = entry.get("forward_user_token", False)
+            if not isinstance(forward_user_token, bool):
+                raise ValueError(
+                    f"capability {cap_id!r}: 'forward_user_token' must be "
+                    f"a boolean (got {forward_user_token!r})"
+                )
             if entry["kind"] in ("snowflake", "sqlserver"):
                 if not spec.get("query"):
                     raise ValueError(
@@ -172,6 +187,7 @@ class YamlCapabilityRepository:
                 list_paths=tuple(list_paths),
                 keep=keep,
                 max_results=max_results,
+                forward_user_token=forward_user_token,
             )
             if cap.id in capabilities:
                 raise ValueError(f"duplicate capability id: {cap.id}")
@@ -191,3 +207,43 @@ class YamlCapabilityRepository:
             raise
         except Exception as exc:  # noqa: BLE001
             raise CapabilityRepositoryError(f"registry ping failed: {exc}") from exc
+
+
+def validate_forwarding_conflicts(
+    capabilities, connections: dict
+) -> None:
+    """Fail fast when a forwarding capability also has a static identity.
+
+    An HTTP capability with ``forward_user_token=true`` sends the
+    calling user's bearer token downstream (ADR 0008, decision 5). If
+    its connection also defines a static ``api_key``, one call would
+    carry two identities — that is a startup config error, not a
+    precedence choice. This function is the single check; the
+    composition root wires the one call site (it owns both the loaded
+    capabilities and ``DATA_CONNECTIONS``). It is deliberately not
+    called from the repository loader: the loader never sees
+    connections, and the conflict is between the two configs.
+
+    ``connections`` has the ``DATA_CONNECTIONS`` shape: name -> config
+    mapping. Only HTTP capabilities with forwarding on are checked;
+    SQL kinds validate-but-ignore the flag, and a connection missing
+    from the mapping passes here — the missing connection fails
+    elsewhere, at execution time.
+
+    Raises:
+        CapabilityRepositoryError: naming the capability and the
+            connection, when both are present.
+    """
+    for cap in capabilities:
+        if cap.kind != "http" or not cap.forward_user_token:
+            continue
+        config = connections.get(cap.connection) if isinstance(connections, dict) else None
+        if not isinstance(config, dict):
+            continue  # missing/malformed connection: fails elsewhere
+        if config.get("api_key"):
+            raise CapabilityRepositoryError(
+                f"capability {cap.id!r}: 'forward_user_token' is true but "
+                f"connection {cap.connection!r} defines a static "
+                "'api_key' — two identities for one call is ambiguous; "
+                "remove one"
+            )

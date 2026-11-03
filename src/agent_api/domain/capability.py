@@ -48,6 +48,13 @@ class Capability:
     list_paths: tuple[str, ...] = ()
     keep: str = "first"  # "first" | "last"
     max_results: int = DEFAULT_MAX_RESULTS  # 1..MAX_MAX_RESULTS
+    # Token forwarding (HTTP executors only; SQL kinds validate-but-ignore
+    # this at load, like the trimming settings above). When true and a
+    # user token is present in the per-turn request context, the HTTP
+    # executor sends it as the downstream Authorization bearer token
+    # (ADR 0008). The token never reaches the model: it travels via the
+    # request context, never via tool arguments or history.
+    forward_user_token: bool = False
 
     def __post_init__(self) -> None:
         # Domain invariant, enforced wherever a Capability is built;
@@ -85,6 +92,11 @@ class Capability:
             raise ValueError(
                 f"capability {self.id!r}: 'max_results' must be between 1 "
                 f"and {MAX_MAX_RESULTS} (got {self.max_results})"
+            )
+        if not isinstance(self.forward_user_token, bool):
+            raise ValueError(
+                f"capability {self.id!r}: 'forward_user_token' must be a "
+                f"boolean (got {self.forward_user_token!r})"
             )
 
 

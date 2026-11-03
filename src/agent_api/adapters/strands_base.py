@@ -13,14 +13,124 @@ so the error is raised instead.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
-from typing import AsyncIterator
+import sys
+from typing import TYPE_CHECKING, AsyncIterator
 
 from strands import Agent
 from strands.tools.executors.concurrent import ConcurrentToolExecutor
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:  # pragma: no cover
+    from collections.abc import AsyncGenerator
+    from typing import Any
+
+    from strands.telemetry.metrics import Trace
+    from strands.tools.structured_output._structured_output_context import (
+        StructuredOutputContext,
+    )
+    from strands.types._events import TypedEvent
+    from strands.types.tools import ToolResult, ToolUse
+
+
+class ContextPropagatingToolExecutor(ConcurrentToolExecutor):
+    """ConcurrentToolExecutor that carries the caller's context into tools.
+
+    The per-turn request context (ADR 0008: principal + raw user token)
+    is a context variable set in the request thread. Tools must see it
+    — the HTTP executor reads the token from it — but a value set
+    inside a tool must never leak into a later turn, including across
+    reused worker threads. This executor is the guarantee: every tool
+    invocation runs in its own copy of the calling context, so context
+    flows in and can never flow back out.
+
+    Override point: this is the narrowest one available in
+    strands-agents 1.57.1. The parent runs tools as asyncio tasks
+    created in ``_execute`` (sync tools then run via
+    ``asyncio.to_thread`` inside the tool itself); ``_task`` cannot be
+    wrapped — a coroutine cannot be run inside ``Context.run`` — and
+    ``_stream``/``_stream_with_trace`` are shared with the sequential
+    executor, so overriding them would change more than the concurrent
+    path. Only ``_execute`` is overridden, and only its task-creation
+    call differs from the parent's (mirrored verbatim from 1.57.1,
+    including queue draining, error surfacing, and cancellation):
+    each task is created with ``context=`` set to a fresh copy of the
+    context captured at ``_execute`` entry.
+
+    Each tool gets its OWN copy (``base.copy()`` per task), not one
+    shared Context: concurrent tools sharing a Context object would
+    see each other's context-variable writes. On Python < 3.11
+    ``asyncio.create_task`` has no ``context=`` parameter, so this
+    falls back to the parent's plain call — default task inheritance,
+    no worse than the stock executor. Every supported runtime here
+    is 3.12 (CI, Docker, Lambda).
+    """
+
+    async def _execute(
+        self,
+        agent: "Agent",
+        tool_uses: list[ToolUse],
+        tool_results: list[ToolResult],
+        cycle_trace: Trace,
+        cycle_span: Any,
+        invocation_state: dict[str, Any],
+        structured_output_context: "StructuredOutputContext | None" = None,
+    ) -> AsyncGenerator[TypedEvent, None]:
+        task_queue: asyncio.Queue[tuple[int, Any]] = asyncio.Queue()
+        task_events = [asyncio.Event() for _ in tool_uses]
+        task_results: list[list[ToolResult]] = [[] for _ in tool_uses]
+        stop_event = object()
+        # Snapshot the calling context once; each tool task runs in
+        # its own copy of it (see the class docstring).
+        calling_context = contextvars.copy_context()
+
+        tasks = []
+        try:
+            for task_id, tool_use in enumerate(tool_uses):
+                coro = self._task(
+                    agent,
+                    tool_use,
+                    task_results[task_id],
+                    cycle_trace,
+                    cycle_span,
+                    invocation_state,
+                    task_id,
+                    task_queue,
+                    task_events[task_id],
+                    stop_event,
+                    structured_output_context,
+                )
+                if sys.version_info >= (3, 11):
+                    tasks.append(
+                        asyncio.create_task(
+                            coro, context=calling_context.copy()
+                        )
+                    )
+                else:  # pragma: no cover - all supported runtimes are 3.12
+                    tasks.append(asyncio.create_task(coro))
+
+            task_count = len(tasks)
+            while task_count:
+                task_id, event = await task_queue.get()
+                if event is stop_event:
+                    task_count -= 1
+                    continue
+
+                if isinstance(event, Exception):
+                    raise event
+
+                yield event
+                task_events[task_id].set()
+            for results in task_results:
+                tool_results.extend(results)
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
 
 from agent_api.domain.conversation import ASSISTANT, USER, Conversation, ToolResult, Turn
 from agent_api.platform.retry import RetryPolicy, backoff_delay, call_with_retry
@@ -178,7 +288,12 @@ class StrandsGatewayBase(ModelGateway):
             # a dependent call (execute after discover) must span loop
             # iterations — the discover/execute provenance set enforces
             # that ordering on top of this.
-            tool_executor=ConcurrentToolExecutor(),
+            # ADR 0008: the propagating subclass, so the per-turn
+            # request context (principal + user token) reaches tools
+            # running in worker threads/tasks and can never leak back
+            # into a later turn. Same concurrency and error handling
+            # as ConcurrentToolExecutor; see its docstring.
+            tool_executor=ContextPropagatingToolExecutor(),
             # Explicit None -> null handler. The default would print every
             # streamed token to the server's stdout.
             callback_handler=None,

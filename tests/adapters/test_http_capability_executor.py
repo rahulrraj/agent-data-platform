@@ -125,7 +125,7 @@ class _SequenceClient:
         return StubResponse(200, {"ok": True})
 
 
-def _sequence_executor(monkeypatch, statuses, max_attempts=3):
+def _sequence_executor(monkeypatch, statuses, max_attempts=3, connections=None):
     client = _SequenceClient(statuses)
 
     class _ClientFactory:
@@ -139,7 +139,10 @@ def _sequence_executor(monkeypatch, statuses, max_attempts=3):
             return False
 
     monkeypatch.setattr(httpx, "Client", _ClientFactory)
-    executor = HttpCapabilityExecutor(CONNECTIONS, RetryPolicy(max_attempts=max_attempts, base_delay=0))
+    executor = HttpCapabilityExecutor(
+        CONNECTIONS if connections is None else connections,
+        RetryPolicy(max_attempts=max_attempts, base_delay=0),
+    )
     return executor, client
 
 
@@ -205,6 +208,143 @@ def test_path_value_with_slash_allowed_when_opted_in(monkeypatch):
     assert client.last_url == "https://api.example.com/orders/a/b"
 
 
+# --- Token forwarding (ADR 0008) ---
+
+from agent_api.adapters.http_capability_executor import _redact
+from agent_api.platform.request_context import request_context
+
+_NO_KEY_CONNECTIONS = {
+    "orders_api": {"base_url": "https://api.example.com"},
+}
+
+FORWARD_CAP = Capability(
+    id="order_status_forwarded",
+    description="Order status by order number, forwarding the user token",
+    kind="http",
+    connection="orders_api",
+    mode="read",
+    parameters=(
+        ParameterSpec(name="order_number", type="string", required=True),
+    ),
+    spec={
+        "request": {
+            "method": "GET",
+            "path": "/orders/{order_number}",
+            "fields": ["status", "tracking_number"],
+        }
+    },
+    forward_user_token=True,
+)
+
+FAKE_USER_TOKEN = "fake-user-token-1"
+
+
+def _forwarding_executor(monkeypatch, connections=_NO_KEY_CONNECTIONS):
+    monkeypatch.setattr(httpx, "Client", StubClient)
+    return HttpCapabilityExecutor(connections, RetryPolicy(max_attempts=1))
+
+
+def test_forwarding_sends_user_token_when_flag_and_token(monkeypatch):
+    executor = _forwarding_executor(monkeypatch)
+    with request_context("user-1", FAKE_USER_TOKEN):
+        result = executor.execute(FORWARD_CAP, {"order_number": "ORD-1"})
+    assert result == {"data": {"status": "shipped", "tracking_number": "1Z999"}}
+    assert StubClient.last_request["headers"]["Authorization"] == f"Bearer {FAKE_USER_TOKEN}"
+
+
+def test_forwarding_absent_when_flag_off_even_with_token(monkeypatch):
+    executor = _forwarding_executor(monkeypatch, CONNECTIONS)
+    with request_context("user-1", FAKE_USER_TOKEN):
+        executor.execute(ORDER_CAP, {"order_number": "ORD-1"})
+    # Static service credential only; the user token never reaches a
+    # capability that did not opt in.
+    assert StubClient.last_request["headers"]["Authorization"] == "Bearer secret"
+
+
+def test_forwarding_absent_when_no_token(monkeypatch):
+    executor = _forwarding_executor(monkeypatch)
+    executor.execute(FORWARD_CAP, {"order_number": "ORD-1"})
+    assert "Authorization" not in StubClient.last_request["headers"]
+    with request_context("user-1", None):
+        executor.execute(FORWARD_CAP, {"order_number": "ORD-1"})
+    assert "Authorization" not in StubClient.last_request["headers"]
+
+
+def test_forwarding_preserves_connection_extra_headers(monkeypatch):
+    connections = {
+        "orders_api": {
+            "base_url": "https://api.example.com",
+            "headers": {"X-Custom": "1"},
+        }
+    }
+    executor = _forwarding_executor(monkeypatch, connections)
+    with request_context("user-1", FAKE_USER_TOKEN):
+        executor.execute(FORWARD_CAP, {"order_number": "ORD-1"})
+    headers = StubClient.last_request["headers"]
+    assert headers["Authorization"] == f"Bearer {FAKE_USER_TOKEN}"
+    assert headers["X-Custom"] == "1"
+
+
+def test_forwarding_conflict_with_static_key_raises_without_sending(monkeypatch):
+    # Load-time check is the enforcement; this is the defensive
+    # duplicate: both identities present -> neither is sent.
+    executor, client = _sequence_executor(monkeypatch, [200])
+    with request_context("user-1", FAKE_USER_TOKEN):
+        with pytest.raises(CapabilityExecutorError, match="refusing to send either") as excinfo:
+            executor.execute(FORWARD_CAP, {"order_number": "ORD-1"})
+    assert FAKE_USER_TOKEN not in str(excinfo.value)
+    assert client.calls == 0
+
+
+@pytest.mark.parametrize("header_name", ["Authorization", "authorization"])
+def test_forwarding_conflict_with_static_header_raises(monkeypatch, header_name):
+    connections = {
+        "orders_api": {
+            "base_url": "https://api.example.com",
+            "headers": {header_name: "Bearer static-service-token"},
+        }
+    }
+    executor = _forwarding_executor(monkeypatch, connections)
+    with request_context("user-1", FAKE_USER_TOKEN):
+        with pytest.raises(CapabilityExecutorError, match="refusing to send either"):
+            executor.execute(FORWARD_CAP, {"order_number": "ORD-1"})
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_downstream_auth_failure_not_retried(monkeypatch, status):
+    executor, client = _sequence_executor(
+        monkeypatch, [status, 200], connections=_NO_KEY_CONNECTIONS
+    )
+    with request_context("user-1", FAKE_USER_TOKEN):
+        with pytest.raises(CapabilityExecutorError, match=f"http {status}"):
+            executor.execute(FORWARD_CAP, {"order_number": "ORD-1"})
+    assert client.calls == 1
+
+
+def test_downstream_auth_failure_carries_no_token_or_body(monkeypatch, caplog):
+    body = f"denied for Bearer {FAKE_USER_TOKEN}: not your order"
+    executor = _raw_executor(
+        monkeypatch, _RawResponse(401, body, {"error": "denied"}),
+        connections=_NO_KEY_CONNECTIONS,
+    )
+    with request_context("user-1", FAKE_USER_TOKEN):
+        with pytest.raises(CapabilityExecutorError) as excinfo:
+            executor.execute(FORWARD_CAP, {"order_number": "ORD-1"})
+    assert "http 401" in str(excinfo.value)
+    assert FAKE_USER_TOKEN not in str(excinfo.value)
+    assert "denied" not in str(excinfo.value)
+    # The server-side log is redacted too: no raw token anywhere.
+    assert FAKE_USER_TOKEN not in caplog.text
+
+
+def test_redact_masks_bearer_and_key_value_fragments():
+    assert "abc123" not in _redact("Authorization: Bearer abc123")
+    assert "***" in _redact("Authorization: Bearer abc123")
+    assert "xyz" not in _redact("api_key=xyz")
+    assert "secretvalue9" not in _redact("token: secretvalue9")
+
+
+
 # --- m-4 / m-8 / m-14 / response-shape nits (2026-10-25) ---
 
 
@@ -268,7 +408,7 @@ class _RawResponse:
         return self._payload
 
 
-def _raw_executor(monkeypatch, response):
+def _raw_executor(monkeypatch, response, connections=None):
     client = _RawClient(response)
 
     class _ClientFactory:
@@ -282,7 +422,10 @@ def _raw_executor(monkeypatch, response):
             return False
 
     monkeypatch.setattr(httpx, "Client", _ClientFactory)
-    return HttpCapabilityExecutor(CONNECTIONS, RetryPolicy(max_attempts=1))
+    return HttpCapabilityExecutor(
+        CONNECTIONS if connections is None else connections,
+        RetryPolicy(max_attempts=1),
+    )
 
 
 def test_empty_204_returns_none_not_crash(monkeypatch):

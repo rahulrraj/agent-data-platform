@@ -17,6 +17,16 @@ See doc/data-capabilities.md. Defaults: cap 50, keep the first rows.
 The opt-in ceiling is 500; the SQL path's 50-row cap is separate
 and unchanged.
 
+Token forwarding (ADR 0008): when a capability sets
+`forward_user_token: true` and the per-turn request context carries a
+user token, the executor sends `Authorization: Bearer <user token>`
+instead of any static credential. A connection that also defines a
+static `api_key` is a load-time config error (see
+validate_forwarding_conflicts); the executor still refuses defensively
+at call time if both are somehow present, sending neither. The token
+is never logged and never appears in an error: only the redacted
+status reaches the caller, as with any upstream failure.
+
 GET: params not used in the path become query-string params.
 POST: params become the JSON body.
 
@@ -49,9 +59,16 @@ logger = logging.getLogger(__name__)
 # m-8: secret-looking fragments are masked before any error text is
 # logged or returned; the model-facing message never carries an upstream
 # response body at all (see execute()).
+# ORDER MATTERS: the Bearer pattern must run first. The key=value
+# pattern below would otherwise consume the word "Bearer" as the value
+# of "Authorization:" and leave the actual token exposed
+# ("Authorization: Bearer <token>" -> "Authorization*** <token>").
+# With forwarding (ADR 0008) a real user token can appear in exactly
+# that shape in an upstream body or error string, so this ordering is
+# load-bearing, not cosmetic.
 _REDACT_PATTERNS = (
-    re.compile(r"(password|passwd|api[_-]?key|secret|token|authorization)(\s*[:=]\s*)\S+", re.I),
     re.compile(r"(Bearer\s+)\S+", re.I),
+    re.compile(r"(password|passwd|api[_-]?key|secret|token|authorization)(\s*[:=]\s*)\S+", re.I),
 )
 
 
@@ -61,6 +78,7 @@ def _redact(text: str) -> str:
     return text
 
 from agent_api.domain.capability import Capability
+from agent_api.platform.request_context import get_request_context
 from agent_api.platform.retry import RetryPolicy, call_with_retry
 from agent_api.ports.capability_executor import (
     CapabilityExecutor,
@@ -157,6 +175,9 @@ class HttpCapabilityExecutor(CapabilityExecutor):
         ):
             return True
         status = getattr(exc, "status_code", None)
+        # 401/403 are deliberately non-transient (ADR 0008): a rejected
+        # user token will not become valid on retry, and retrying would
+        # only repeat the rejected call.
         return status == 429 or (isinstance(status, int) and 500 <= status < 600)
 
     @staticmethod
@@ -310,6 +331,31 @@ class HttpCapabilityExecutor(CapabilityExecutor):
         headers = dict(config.get("headers") or {})
         if config.get("api_key"):
             headers.setdefault("Authorization", f"Bearer {config['api_key']}")
+        if capability.forward_user_token:
+            # ADR 0008: the user's token travels via the per-turn
+            # request context, never via tool arguments or history, so
+            # the model never sees it. It is read here, at the moment
+            # of the downstream call, and placed only on the outgoing
+            # request — never logged, never in an error (see _redact
+            # and the HttpStatusError handling in execute()).
+            context = get_request_context()
+            user_token = context.token if context is not None else None
+            if user_token:
+                # Defensive duplicate of the load-time conflict check:
+                # a static identity and a user token must never share
+                # one call. Send neither; fail loudly instead.
+                has_static_identity = bool(config.get("api_key")) or any(
+                    key.lower() == "authorization" for key in headers
+                )
+                if has_static_identity:
+                    raise CapabilityExecutorError(
+                        f"capability '{capability.id}': 'forward_user_token' "
+                        "is true and a user token is present, but "
+                        f"connection '{capability.connection}' also "
+                        "defines a static identity — refusing to send "
+                        "either"
+                    )
+                headers["Authorization"] = f"Bearer {user_token}"
 
         # trust_env=False: the sandbox's no_proxy values break httpx parsing.
         with httpx.Client(trust_env=False, timeout=30) as client:

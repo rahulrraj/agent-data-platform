@@ -235,3 +235,38 @@ def test_max_results_boundaries_accepted(tmp_path):
     for value in ("1", "500"):
         repo = _trim_entry(tmp_path, f"    max_results: {value}\n")
         assert repo.get("x").max_results == int(value)
+
+
+# --- Token forwarding (ADR 0008): load-time validation ---
+
+def test_forward_user_token_parsed_and_not_in_spec(tmp_path):
+    repo = _trim_entry(tmp_path, "    forward_user_token: true\n")
+    cap = repo.get("x")
+    assert cap.forward_user_token is True
+    assert "forward_user_token" not in cap.spec
+
+
+def test_forward_user_token_defaults_false(tmp_path):
+    repo = _trim_entry(tmp_path, "")
+    assert repo.get("x").forward_user_token is False
+
+
+@pytest.mark.parametrize("value", ['"true"', "1", "[true]", "{a: true}"])
+def test_forward_user_token_non_bool_rejected_at_load(tmp_path, value):
+    with pytest.raises(CapabilityRepositoryError, match="forward_user_token"):
+        _trim_entry(tmp_path, f"    forward_user_token: {value}\n")
+
+
+def test_forward_user_token_accepted_for_sql_kind(tmp_path):
+    # Validate-but-ignore, like the trimming settings: the flag is
+    # carried on the Capability, SQL executors never read it.
+    repo = _load_entry(tmp_path, """  - id: x
+    description: "x"
+    kind: snowflake
+    connection: c
+    forward_user_token: true
+    query: "SELECT 1"
+""")
+    cap = repo.get("x")
+    assert cap.forward_user_token is True
+    assert cap.spec["query"] == "SELECT 1"
