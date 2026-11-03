@@ -1,5 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { streamChat } from "./api.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getHealth, getReadiness, streamChat } from "./api.js";
+import {
+  clearDiscoveryCache,
+  storeTokens,
+} from "./auth.js";
 
 function sseStream(byteChunks) {
   const encoder = new TextEncoder();
@@ -40,6 +44,14 @@ const ev = (type, payload) => `data: ${JSON.stringify({ type, payload })}\n\n`;
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  sessionStorage.clear();
+  clearDiscoveryCache();
+});
+
+beforeEach(() => {
+  sessionStorage.clear();
+  clearDiscoveryCache();
 });
 
 describe("streamChat", () => {
@@ -201,5 +213,124 @@ describe("streamChat", () => {
   it("throws on a trailing partial frame with no terminator (M-24)", async () => {
     mockFetch([ev("text", "done."), 'data: {"type": "text", "payload": "cut']);
     await expect(collect()).rejects.toThrow("Incomplete reply");
+  });
+});
+
+describe("authorization headers and 401 handling (ADR 0008)", () => {
+  it("attaches the bearer token on getHealth", async () => {
+    storeTokens({ accessToken: "tok-1", expiresIn: 3600 });
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: "ok" }),
+    }));
+    await getHealth();
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/health",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok-1" },
+      })
+    );
+  });
+
+  it("attaches the bearer token on getReadiness", async () => {
+    storeTokens({ accessToken: "tok-1", expiresIn: 3600 });
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: "ok" }),
+    }));
+    await getReadiness();
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/ready",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok-1" },
+      })
+    );
+  });
+
+  it("attaches the bearer token on streamChat", async () => {
+    storeTokens({ accessToken: "tok-1", expiresIn: 3600 });
+    mockFetch([ev("text", "hi"), "data: [DONE]\n\n"]);
+    await collect();
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/chat",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer tok-1" }),
+      })
+    );
+  });
+
+  it("sends no Authorization header with no stored token", async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: "ok" }),
+    }));
+    await getHealth();
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/health",
+      expect.objectContaining({ headers: {} })
+    );
+  });
+
+  it("drops tokens and throws AuthError on a 401 from getHealth", async () => {
+    storeTokens({ accessToken: "tok-1", expiresIn: 3600 });
+    global.fetch = vi.fn(async () => ({ ok: false, status: 401 }));
+    await expect(getHealth()).rejects.toThrow("session has expired");
+    expect(sessionStorage.getItem("agent.auth.access_token")).toBeNull();
+  });
+
+  it("drops tokens and throws AuthError on a 401 from getReadiness", async () => {
+    storeTokens({ accessToken: "tok-1", expiresIn: 3600 });
+    global.fetch = vi.fn(async () => ({ ok: false, status: 401 }));
+    await expect(getReadiness()).rejects.toThrow("session has expired");
+    expect(sessionStorage.getItem("agent.auth.access_token")).toBeNull();
+  });
+
+  it("drops tokens and throws AuthError on a 401 from streamChat", async () => {
+    storeTokens({ accessToken: "tok-1", expiresIn: 3600 });
+    mockFetch([], false, 401);
+    await expect(collect()).rejects.toThrow("session has expired");
+    expect(sessionStorage.getItem("agent.auth.access_token")).toBeNull();
+  });
+
+  it("renews silently before a chat call when the token is expired", async () => {
+    vi.stubEnv("VITE_OIDC_ISSUER", "https://example.okta.com");
+    vi.stubEnv("VITE_OIDC_CLIENT_ID", "fake-client-id");
+    storeTokens({ accessToken: "old", refreshToken: "rt-1", expiresIn: -10 });
+    const tokenEndpoint = "https://example.okta.com/oauth2/v1/token";
+    global.fetch = vi.fn(async (url) => {
+      const u = String(url);
+      if (u.endsWith("/.well-known/openid-configuration")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            authorization_endpoint: "https://example.okta.com/oauth2/v1/authorize",
+            token_endpoint: tokenEndpoint,
+          }),
+        };
+      }
+      if (u === tokenEndpoint) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            access_token: "fresh",
+            expires_in: 3600,
+          }),
+        };
+      }
+      return { ok: true, status: 200, body: sseStream([ev("text", "hi"), "data: [DONE]\n\n"]) };
+    });
+    const events = await collect();
+    expect(events).toEqual([{ type: "text", payload: "hi" }]);
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/chat",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer fresh" }),
+      })
+    );
   });
 });

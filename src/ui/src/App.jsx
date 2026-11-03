@@ -1,9 +1,18 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Sidebar from "./components/Sidebar.jsx";
 import Composer from "./components/Composer.jsx";
+import LoginScreen from "./components/LoginScreen.jsx";
 import { Message, Welcome } from "./components/Message.jsx";
 import { MenuIcon, MoonIcon, Sparkle, SunIcon } from "./components/icons.jsx";
 import { getHealth, getReadiness, streamChat } from "./api.js";
+import {
+  clearTokens,
+  getAuthConfig,
+  getValidAccessToken,
+  handleCallback,
+  isAuthError,
+  startLogin,
+} from "./auth.js";
 import { loadSessions, saveSessions } from "./sessions.js";
 
 // M-28: collision-proof, unguessable ids. crypto.randomUUID() needs a
@@ -59,6 +68,16 @@ export default function App() {
     }
   });
   const [composerFocusKey, setComposerFocusKey] = useState(0);
+  // ADR 0008: "checking" while a possible OIDC callback / stored
+  // session resolves; "login" shows only the login screen (no API
+  // calls); "unconfigured" when the build has no issuer/client id;
+  // "authenticated" renders the app. Nothing below fetches until
+  // authenticated — the health effect and the save effect are gated
+  // on this state.
+  const [authStatus, setAuthStatus] = useState("checking");
+  const [authError, setAuthError] = useState(null);
+  const [loginBusy, setLoginBusy] = useState(false);
+  const authInitRef = useRef(false);
   const abortRef = useRef(null);
   // m-36: which session the in-flight stream belongs to, so the
   // finally block below can tell a stale stream from the current one.
@@ -95,6 +114,11 @@ export default function App() {
   // of the long-output cost). A throttled save is flushed by the
   // effect re-running when streaming ends (streaming is a dep).
   useEffect(() => {
+    // ADR 0008: nothing is persisted before authentication either —
+    // the login screen must leave no trace beyond the auth module's
+    // own sessionStorage. (Sessions cannot change pre-login anyway;
+    // this guards the mount-time save of the loaded list.)
+    if (authStatus !== "authenticated") return;
     if (streaming) {
       const now = Date.now();
       if (now - lastSaveRef.current < 500) return;
@@ -103,7 +127,7 @@ export default function App() {
       lastSaveRef.current = Date.now();
     }
     setStorageWarning(!saveSessions(sessions).ok);
-  }, [sessions, streaming]);
+  }, [sessions, streaming, authStatus]);
 
   // m-41(d): another tab editing history no longer silently loses to
   // last-writer-wins — reload from storage on `storage` events, unless
@@ -124,6 +148,64 @@ export default function App() {
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
+  // ADR 0008: resolve authentication once, on mount. Order: the
+  // dev-only bypass, then fail-visible unconfigured state, then a
+  // possible OIDC callback (code exchange + claim checks), then a
+  // stored session (with silent renewal when a refresh token
+  // exists). A callback or renewal failure lands on the login gate
+  // with the error shown — never on the app, and never silently
+  // anonymous. The ref guard makes a StrictMode double-effect in
+  // dev resolve once: the callback consumes its pending state, so a
+  // second run would find no callback and fall through to the
+  // stored token anyway, but resolving once keeps it unambiguous.
+  useEffect(() => {
+    if (authInitRef.current) return;
+    authInitRef.current = true;
+    (async () => {
+      const config = getAuthConfig();
+      if (config.authDisabled) {
+        setAuthStatus("authenticated");
+        return;
+      }
+      if (!config.configured) {
+        setAuthStatus("unconfigured");
+        return;
+      }
+      try {
+        const cb = await handleCallback(config);
+        if (cb.handled) {
+          setAuthStatus("authenticated");
+          return;
+        }
+      } catch (e) {
+        setAuthError(e.message);
+        setAuthStatus("login");
+        return;
+      }
+      try {
+        const token = await getValidAccessToken(config);
+        setAuthStatus(token ? "authenticated" : "login");
+      } catch {
+        clearTokens();
+        setAuthStatus("login");
+      }
+    })();
+  }, []);
+
+  const handleLogin = useCallback(async () => {
+    setLoginBusy(true);
+    setAuthError(null);
+    try {
+      // On success the browser leaves the page for the provider;
+      // busy stays set. On failure (e.g. discovery down) the error
+      // shows on the login screen and the button re-enables.
+      await startLogin(getAuthConfig());
+    } catch (e) {
+      setAuthError(e.message);
+      setLoginBusy(false);
+    }
+  }, []);
+
   // M-27: liveness + readiness, polled and re-checked on focus and
   // after a send failure (see send's catch). `null` = check in flight.
   const checkHealth = useCallback(async () => {
@@ -131,7 +213,16 @@ export default function App() {
       const h = await getHealth();
       setApiOk(true);
       setModelLabel(h.model || "");
-    } catch {
+    } catch (e) {
+      // ADR 0008: a 401 drops the token (api.js) and re-authenticates
+      // — route back to the login gate instead of showing "offline".
+      if (isAuthError(e)) {
+        clearTokens();
+        setModelLabel("");
+        setApiOk(null);
+        setAuthStatus("login");
+        return;
+      }
       setApiOk(false);
       // m-43: hide the pill rather than showing a stale model after
       // the API goes away or restarts with a different model; the
@@ -142,12 +233,22 @@ export default function App() {
       const r = await getReadiness();
       setReadyOk(r.ok);
       setReadyFailing(r.ok ? [] : r.body?.failing || []);
-    } catch {
+    } catch (e) {
+      if (isAuthError(e)) {
+        clearTokens();
+        setReadyOk(null);
+        setAuthStatus("login");
+        return;
+      }
       setReadyOk(null);
     }
   }, []);
 
   useEffect(() => {
+    // ADR 0008: no API calls before authentication — not even the
+    // health/ready probes. The gate also stops the poll when a 401
+    // routes back to login (the effect cleans up on status change).
+    if (authStatus !== "authenticated") return undefined;
     checkHealth();
     const timer = setInterval(checkHealth, 30000);
     window.addEventListener("focus", checkHealth);
@@ -155,7 +256,7 @@ export default function App() {
       clearInterval(timer);
       window.removeEventListener("focus", checkHealth);
     };
-  }, [checkHealth]);
+  }, [checkHealth, authStatus]);
 
   const active = sessions.find((s) => s.id === activeId) || null;
 
@@ -308,7 +409,20 @@ export default function App() {
           ),
         }));
       } catch (e) {
-        if (e.name === "AbortError") {
+        if (isAuthError(e)) {
+          // ADR 0008: a 401 mid-stream ends the turn — drop the
+          // placeholder assistant message (never a partial reply),
+          // keep the user's message, and route to the login gate.
+          // No health re-check: api.js already dropped the tokens,
+          // and checkHealth must not fire unauthenticated.
+          clearTokens();
+          patchSession(sid, (s) => ({
+            messages: s.messages.filter(
+              (m, i) => !(i === s.messages.length - 1 && m.role === "assistant")
+            ),
+          }));
+          setAuthStatus("login");
+        } else if (e.name === "AbortError") {
           // User stopped: keep whatever arrived, no error banner.
           // m-42: mark it aborted so the tool pill never claims "Used".
           patchSession(sid, (s) => ({
@@ -363,6 +477,21 @@ export default function App() {
     },
     [sessions, send]
   );
+
+  // ADR 0008: before authentication the app is ONLY the login
+  // screen. All hooks above have run; the effects that fetch or
+  // persist are gated on authStatus, so this early return makes no
+  // API calls.
+  if (authStatus !== "authenticated") {
+    return (
+      <LoginScreen
+        status={authStatus}
+        error={authError}
+        busy={loginBusy}
+        onSignIn={handleLogin}
+      />
+    );
+  }
 
   return (
     <div className="app">

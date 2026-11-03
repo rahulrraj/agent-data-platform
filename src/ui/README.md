@@ -24,6 +24,49 @@ For a deployed build, set `VITE_API_URL` to the API origin before
 VITE_API_URL=https://api.example.com npm run build
 ```
 
+## Authentication (ADR 0008)
+
+The UI forces sign-in through a generic OIDC provider (Okta first;
+no provider-specific code — the provider is only configuration).
+There is no anonymous mode: with no valid token the app shows only
+the login screen and makes no API calls, and every API call carries
+`Authorization: Bearer <token>` (including health/ready).
+
+Build-time variables, same pattern as `VITE_API_URL` (changing them
+needs a rebuild):
+
+| Variable | Required | Meaning |
+|---|---|---|
+| `VITE_OIDC_ISSUER` | yes | Issuer base URL, e.g. `https://example.okta.com` |
+| `VITE_OIDC_CLIENT_ID` | yes | The OIDC client id registered for this UI |
+| `VITE_OIDC_AUDIENCE` | no | Expected `aud` claim; defaults to the client id |
+
+The redirect URI is always `window.location.origin` — register that
+exact origin as an allowed redirect URI at the provider. A
+production build without an issuer/client id refuses to render the
+app (a visible "Sign-in isn't configured" screen) rather than
+running open.
+
+Flow: Authorization Code + PKCE (S256), `state` + `nonce` checked,
+discovery via `{issuer}/.well-known/openid-configuration`, one code
+exchange, then the callback query string is stripped from the
+address bar. The `id_token`'s iss/aud/exp/nonce/sub claims are
+checked before anything is stored; signature verification is the
+backend API's job. Tokens live in `sessionStorage` only — never
+`localStorage`, never logged, never in a URL. When the access token
+nears expiry and the provider issued a refresh token, it is renewed
+silently with the refresh grant; if renewal fails, or no refresh
+token was issued, the session ends and the user signs in again. A
+401 from any API call drops the tokens and returns to the login
+screen.
+
+Test/dev only: `VITE_AUTH_DISABLED=true` bypasses the gate, and is
+honored only in dev builds (`import.meta.env.DEV`); production
+builds ignore it. See `src/auth.js` and `src/auth.test.js` — all
+verification uses mocked fetch against fake endpoints; no live
+provider calls and no real credentials anywhere in the repo. Copy
+`.env.example` for the full list.
+
 ## Deployment: the UI image needs an `/api` route in front of it
 
 The nginx image serves only the static bundle — `nginx.conf` has no
@@ -93,7 +136,7 @@ Running the image standalone with `VITE_API_URL` unset does not work:
 ## Tests
 
 ```bash
-npm test   # vitest: markdown renderer + SSE client + session storage
+npm test   # vitest: markdown renderer + SSE client + session storage + OIDC auth
 ```
 
 ## Layout
@@ -105,13 +148,16 @@ ui/
   index.html
   src/
     main.jsx            React root
-    App.jsx             sessions, streaming state, theme, layout
+    App.jsx             sessions, streaming state, theme, layout, auth gate
     api.js              getHealth/getReadiness + SSE streamChat()
+    auth.js             generic OIDC (PKCE, discovery, callback, renewal);
+                        the only module that touches tokens/sessionStorage
     sessions.js         localStorage validation, pruning, quota-safe save
     markdown.jsx        tiny markdown renderer
     components/
       Sidebar.jsx       conversation list
       Message.jsx       user/assistant messages, welcome screen
+      LoginScreen.jsx   pre-authentication login gate (ADR 0008)
       Composer.jsx      autogrowing input, send/stop
       icons.jsx         inline SVGs
     styles.css          all styling, CSS variables for theming

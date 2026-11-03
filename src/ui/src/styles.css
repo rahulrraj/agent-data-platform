@@ -760,3 +760,74 @@ button {
   cursor: pointer;
   flex-shrink: 0;
 }
+
+/* ---------- login gate (ADR 0008) ---------- */
+
+.login-screen {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 420px;
+  text-align: center;
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.login-title {
+  font-size: 22px;
+  margin: 0 0 8px;
+}
+
+.login-text {
+  color: var(--text-dim);
+  font-size: 14.5px;
+  line-height: 1.5;
+  margin: 0 0 20px;
+}
+
+.login-text code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+
+.login-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: 12px;
+  padding: 10px 16px;
+  font-size: 13.5px;
+  margin-bottom: 16px;
+  text-align: left;
+}
+
+.login-btn {
+  background: var(--accent);
+  color: var(--accent-text);
+  border: none;
+  border-radius: 999px;
+  padding: 11px 28px;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.login-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

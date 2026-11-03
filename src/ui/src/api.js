@@ -5,8 +5,33 @@
 // the bundle at build time; changing the origin requires a rebuild),
 // and a trailing slash is stripped so a value like
 // "https://api.example.com/" does not produce "//api/health".
+//
+// ADR 0008: every call carries Authorization: Bearer <token> whenever
+// a token is present — including health/ready, which the backend
+// leaves public but which accept the header harmlessly. A 401 drops
+// the stored tokens and throws AuthError so the app routes back to
+// the login gate; token storage/expiry/renewal live in auth.js and
+// are never touched directly here.
+
+import {
+  AuthError,
+  clearTokens,
+  getAuthConfig,
+  getAuthHeaders,
+} from "./auth.js";
 
 const BASE = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+
+/** Headers for one call: the bearer token, or {} when unauthenticated. */
+async function authHeaders() {
+  return getAuthHeaders(getAuthConfig());
+}
+
+/** A 401 means the session is dead: drop tokens, surface AuthError. */
+function unauthorized() {
+  clearTokens();
+  throw new AuthError("Your session has expired. Please sign in again.");
+}
 
 /** Extract a server error detail ({detail} / {message} / plain text). */
 async function errorDetail(res) {
@@ -31,7 +56,8 @@ async function errorDetail(res) {
 }
 
 export async function getHealth() {
-  const res = await fetch(`${BASE}/api/health`);
+  const res = await fetch(`${BASE}/api/health`, { headers: await authHeaders() });
+  if (res.status === 401) unauthorized();
   if (!res.ok) {
     // m-35: keep the server's error detail instead of only the status.
     const detail = await errorDetail(res);
@@ -43,7 +69,8 @@ export async function getHealth() {
 }
 
 export async function getReadiness() {
-  const res = await fetch(`${BASE}/api/ready`);
+  const res = await fetch(`${BASE}/api/ready`, { headers: await authHeaders() });
+  if (res.status === 401) unauthorized();
   return { ok: res.ok, body: await res.json().catch(() => ({})) };
 }
 
@@ -68,10 +95,11 @@ function findEventEnd(buf) {
 export async function* streamChat(message, sessionId, signal) {
   const res = await fetch(`${BASE}/api/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
     body: JSON.stringify({ message, session_id: sessionId }),
     signal,
   });
+  if (res.status === 401) unauthorized();
   if (!res.ok) {
     // m-35: FastAPI returns {"detail": "..."} for 400/502 — surface it.
     const detail = await errorDetail(res);
