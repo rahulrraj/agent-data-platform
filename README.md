@@ -229,10 +229,11 @@ docker tag agent-api-lambda:latest <account>.dkr.ecr.us-east-1.amazonaws.com/age
 docker push <account>.dkr.ecr.us-east-1.amazonaws.com/agent-api-lambda:latest
 
 # Create the function with a Function URL. The Terraform stack defaults
-# to AWS_IAM auth; NONE is dev-only (the app has no auth middleware, so
-# a public Function URL exposes every registry capability). A browser UI
-# cannot sign AWS_IAM requests, so with the default auth the CloudFront
-# UI needs a signing front door before it can call the API from a browser.
+# to AWS_IAM auth; NONE is allowed only behind CloudFront + WAF, now that
+# the app enforces JWT auth itself (ADR 0008) — without that front door
+# it stays dev-only. A browser UI cannot sign AWS_IAM requests, so with
+# the default auth the CloudFront UI uses the JWT-authenticated path
+# (NONE + CloudFront + WAF) to call the API from a browser.
 # The deploy pipeline builds the UI with VITE_API_URL=<function_url>
 # after apply, so the shipped UI points at the real API.
 aws lambda create-function --function-name agent-api \
@@ -292,6 +293,10 @@ Streaming facts, stated plainly:
 | BEDROCK_MODEL_ID       | `us.anthropic.claude-sonnet-5-5` | Chat model for `bedrock` (cross-region profile) |
 | BEDROCK_EMBED_MODEL    | `amazon.titan-embed-text-v2:0` | Embedding model when provider is `bedrock`    |
 | ALLOWED_MODELS         | — (just the configured model) | JSON: per-request model allowlist, key → `{provider, model}` (ADR 0007) |
+| AUTH_ISSUER            | — (fail-closed)          | OIDC issuer URL; enables JWT auth (ADR 0008)            |
+| AUTH_AUDIENCE          | —                        | Expected JWT audience; required when `AUTH_ISSUER` is set |
+| AUTH_JWKS_URL          | — (via discovery)        | JWKS URL override; default derives from the issuer      |
+| AUTH_DISABLED          | —                        | `true` = dev-only opt-out: no auth, fail-closed off     |
 | RETRY_MAX_ATTEMPTS     | `3`                      | Retry attempts for transient failures                |
 | RETRY_BASE_DELAY       | `0.5`                    | Base backoff delay in seconds (jittered)             |
 | CONVERSATION_STORE     | `memory`                 | `memory` (process-local), `sqlite`, or `postgres`        |
@@ -331,10 +336,12 @@ configs — secrets live here, never in the YAML:
 | ------ | ------------ | ------------------------------------------------------------------ |
 | GET    | /api/health  | `{"status": "ok", "model": ..., "models": [...], "default_model": "default"}` (liveness) |
 | GET    | /api/ready   | `{"status": "ready"}` or 503 `{"status": "not_ready", ...}`         |
-| POST   | /api/ask     | `{message, session_id, model?}` → `{reply, tools_used, session_id}` — `model` is an `ALLOWED_MODELS` key (ADR 0007); absent means the configured model |
-| POST   | /api/chat    | Streams the reply as Server-Sent Events (text/tool/error chunks); same optional `model` field as `/api/ask` |
+| POST   | /api/ask     | `{message, session_id, model?}` → `{reply, tools_used, session_id}` — `model` is an `ALLOWED_MODELS` key (ADR 0007); absent means the configured model. Requires `Authorization: Bearer <token>` when auth is on (ADR 0008) |
+| POST   | /api/chat    | Streams the reply as Server-Sent Events (text/tool/error chunks); same optional `model` field as `/api/ask`; same bearer requirement, validated before the stream starts |
 
-Errors: invalid input (including an unknown `model` key) → 400; model/data failure → 502 with a clean message.
+Errors: invalid input (including an unknown `model` key) → 400; missing/invalid/expired token → 401; a session owned by another user → 403; auth infrastructure unreachable → 503; model/data failure → 502 with a clean message.
+
+Authentication (ADR 0008): when `AUTH_ISSUER` is configured, every data endpoint requires a bearer token (OIDC JWT — Okta first, generic OIDC path); `/api/health` and `/api/ready` stay public. Sessions bind to the first writer's principal. The UI forces login (Authorization Code + PKCE) and sends the token on every call; a capability with `forward_user_token: true` forwards it to the downstream API. With `AUTH_DISABLED=true` (local dev only) the API runs open, exactly as before.
 
 ## Project map
 

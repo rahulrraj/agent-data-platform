@@ -37,7 +37,10 @@ from agent_api.adapters.snowflake_capability_executor import SnowflakeCapability
 from agent_api.adapters.sqlite_conversation_repository import SqliteConversationRepository
 from agent_api.adapters.sqlite_embedding_cache import SqliteEmbeddingCache
 from agent_api.adapters.sqlserver_capability_executor import SqlServerCapabilityExecutor
-from agent_api.adapters.yaml_capability_repository import YamlCapabilityRepository
+from agent_api.adapters.yaml_capability_repository import (
+    YamlCapabilityRepository,
+    validate_forwarding_conflicts,
+)
 from agent_api.config.settings import Settings
 from agent_api.controllers.http import create_app
 from agent_api.domain.prompts import build_system_prompt
@@ -317,6 +320,11 @@ def build_tool_deps(settings: Settings, retry_policy: RetryPolicy) -> ToolDeps:
     registry = YamlCapabilityRepository(settings.capabilities_path)
     embedding_gateway = _embedding_gateway(settings, retry_policy)
     connections = settings.data_connections
+    # ADR 0008, decision 5: a forwarding capability whose connection
+    # also defines a static api_key is a startup config error — two
+    # identities for one call. Fail fast here, where both configs are
+    # in hand, rather than at first execution.
+    validate_forwarding_conflicts(registry.list_all(), connections)
     executors = {
         "http": HttpCapabilityExecutor(connections, retry_policy),
         "snowflake": SnowflakeCapabilityExecutor(connections, retry_policy),

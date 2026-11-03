@@ -83,16 +83,13 @@ can move.
 - **Per-user authorization (`allowed_roles`)** — planned, not built. v1
   acts with the service's permissions by explicit agreement; no per-user
   scoping yet.
-- **Authentication (ADR 0008, proposed 2026-11-03, awaiting Rahul's
-  approval — nothing implemented)** — UI forces login (OIDC, code +
-  PKCE), token on every call, session→principal binding (403 on
-  mismatch), per-capability opt-in token forwarding to downstream HTTP
-  APIs (`forward_user_token`). Provider decided 2026-11-03: Okta first,
-  extendable (generic OIDC path; Okta specifics in config/adapter
-  only). Four open decisions left in the ADR (api_key-vs-forwarding
-  rule, fail-closed startup, machine-client flow, UI token storage).
-  This unblocks `allowed_roles` and the C-1 × C-5 browser/UI tension;
-  identity first, authorization later.
+- **Authentication (done 2026-11-03, ADR 0008 accepted + implemented;
+  live verification against a real Okta tenant still pending)** — UI
+  forces login (OIDC, code + PKCE; Okta first, generic OIDC path),
+  token on every call, session→principal binding (403 on mismatch),
+  per-capability opt-in token forwarding (`forward_user_token`).
+  Still unverified: live login, real JWKS, real token forwarding.
+  `allowed_roles` still planned (identity first, authorization later).
 - **Structured audit log of capability executions** — planned. Today this
   means application logs only.
 - **Output filtering, token budgets, input size cap, injection handling**

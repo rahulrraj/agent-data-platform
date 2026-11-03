@@ -279,3 +279,63 @@ def test_build_app_wires_allowlist_and_rejects_unknown_key(monkeypatch, tmp_path
     )
     assert r.status_code == 400
     assert "available models: default, sonnet" in r.json()["detail"]
+
+def _forwarding_registry(tmp_path, forwarding: bool):
+    registry = tmp_path / "capabilities.yaml"
+    registry.write_text(
+        "capabilities:\n"
+        "  - id: status_check\n"
+        "    description: Check status.\n"
+        "    kind: http\n"
+        "    connection: test_api\n"
+        f"    forward_user_token: {'true' if forwarding else 'false'}\n"
+        "    request:\n"
+        "      path: /status\n"
+        "      method: GET\n"
+    )
+    return str(registry)
+
+
+def test_build_tool_deps_rejects_forwarding_plus_static_key(monkeypatch, tmp_path):
+    # ADR 0008, decision 5: forwarding + a static api_key on the same
+    # connection is a startup config error, raised from build_tool_deps.
+    import json
+
+    from agent_api.composition import build_tool_deps
+    from agent_api.ports.capability_repository import CapabilityRepositoryError
+
+    monkeypatch.setenv("AUTH_DISABLED", "true")
+    monkeypatch.setenv("AGENT_MODEL_PROVIDER", "ollama")
+    monkeypatch.setenv("CONVERSATION_STORE", "memory")
+    monkeypatch.setenv("EMBEDDING_CACHE_PATH", str(tmp_path / "cache.db"))
+    monkeypatch.setenv(
+        "CAPABILITIES_PATH", _forwarding_registry(tmp_path, forwarding=True)
+    )
+    monkeypatch.setenv(
+        "DATA_CONNECTIONS",
+        json.dumps(
+            {"test_api": {"base_url": "https://example.invalid", "api_key": "x"}}
+        ),
+    )
+    with pytest.raises(CapabilityRepositoryError, match="forward_user_token"):
+        build_tool_deps(Settings.from_env(), RetryPolicy())
+
+
+def test_build_tool_deps_allows_forwarding_without_static_key(monkeypatch, tmp_path):
+    import json
+
+    from agent_api.composition import build_tool_deps
+
+    monkeypatch.setenv("AUTH_DISABLED", "true")
+    monkeypatch.setenv("AGENT_MODEL_PROVIDER", "ollama")
+    monkeypatch.setenv("CONVERSATION_STORE", "memory")
+    monkeypatch.setenv("EMBEDDING_CACHE_PATH", str(tmp_path / "cache.db"))
+    monkeypatch.setenv(
+        "CAPABILITIES_PATH", _forwarding_registry(tmp_path, forwarding=True)
+    )
+    monkeypatch.setenv(
+        "DATA_CONNECTIONS",
+        json.dumps({"test_api": {"base_url": "https://example.invalid"}}),
+    )
+    deps = build_tool_deps(Settings.from_env(), RetryPolicy())
+    assert deps.capability_registry.get("status_check").forward_user_token is True

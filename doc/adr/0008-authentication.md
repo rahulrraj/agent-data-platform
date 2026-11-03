@@ -2,7 +2,10 @@
 
 Date: 2026-11-03
 
-Status: **Proposed — awaiting Rahul's approval. Nothing is implemented.**
+Status: **Accepted 2026-11-03 — implemented 2026-11-03** (backend
+auth, token forwarding, UI login gate; local only, not pushed or
+deployed). Live verification against a real Okta tenant is still
+pending: live login, real JWKS, real token forwarding.
 Provider decision resolved 2026-11-03: Okta first, extendable (see
 decision 1).
 
@@ -128,4 +131,8 @@ propagates end to end, UI → agent API → downstream data API.
    confirm.
 
 Resolved 2026-11-03: identity provider — Okta first, with the
-extendability requirement in decision 1.
+extendability requirement in decision 1. All four remaining decisions
+resolved the same day (yes to all four as drafted): api_key +
+forward_user_token is a load-time error; fail-closed startup;
+machine clients via IdP client-credentials; UI tokens in
+sessionStorage + silent renewal.

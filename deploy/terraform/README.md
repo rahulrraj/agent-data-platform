@@ -83,15 +83,13 @@ Do not commit state files (`.gitignore` covers `*.tfstate*`,
 
 ## Lambda stack: auth, CORS, and secrets
 
-- **Function URL auth defaults to `AWS_IAM`.** The app itself has no
-  auth middleware, so a public (`NONE`) Function URL exposes every
-  registry capability — and the service account's credentials — to the
-  internet. `NONE` is dev-only: use it only for a throwaway
-  deployment, never for anything reachable beyond your own testing.
-  Consequence to plan for: a browser cannot sign `AWS_IAM` requests,
-  so with the default the CloudFront UI cannot call the Function URL
-  directly — it needs a signing front door (or a separately
-  authenticated API path) before browser traffic works.
+- **Function URL auth defaults to `AWS_IAM`.** The app now enforces
+  JWT auth itself (ADR 0008), so a `NONE` Function URL behind
+  CloudFront + WAF is defensible for browser traffic — the app is the
+  gate — but `NONE` without that front door stays dev-only, and the
+  default stays `AWS_IAM`. A browser cannot sign `AWS_IAM` requests,
+  so with the default the CloudFront UI uses the JWT-authenticated
+  path (`NONE` + CloudFront + WAF) before browser traffic works.
 - **CORS:** set the stack's `cors_origins` variable to the real UI
   origin(s) (e.g. the CloudFront `ui_url`); it is passed to the
   function as `CORS_ORIGINS` (comma-joined). Leaving it empty keeps

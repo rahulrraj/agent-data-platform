@@ -22,7 +22,7 @@ honest: ✅ enforced in code · 🟡 partial/documented · ❌ planned, not buil
 | 50-row cap + `truncated` flag (HTTP opt-in to 500) | ✅ | Per execution, for SQL rows and HTTP list results; an HTTP capability may opt in, per capability, to a cap up to 500 and nested-list trimming via `list_paths` / `keep`, validated at registry load — SQL stays at 50 |
 | Minimal columns | ✅ | Registry declares only needed fields |
 | Secrets out of the repo | ✅ | Connections live in `DATA_CONNECTIONS` (env JSON), never in YAML |
-| Per-user authorization | 🟡 | Documented: the agent acts with the service's permissions; per-user scoping (`allowed_roles`) is planned |
+| Per-user authorization | 🟡 | Identity enforced (ADR 0008: JWT auth, session→principal binding, opt-in token forwarding); per-user scoping (`allowed_roles`) still planned — non-forwarded calls still act with the service's permissions |
 | Audit log of capability executions | ❌ | Planned — today this means application logs |
 
 ## 3. Model guardrails
@@ -49,7 +49,7 @@ honest: ✅ enforced in code · 🟡 partial/documented · ❌ planned, not buil
 
 | Guardrail | Status | Notes |
 | --- | --- | --- |
-| Tests per layer (arch doc §9) | ✅ | 311 backend tests green, 4 skipped (2026-11-02; update this row in the same commit as any suite change) |
+| Tests per layer (arch doc §9) | ✅ | 429 backend tests green, 4 skipped; 93 UI tests green (2026-11-03; update this row in the same commit as any suite change) |
 | ADRs for architectural decisions | ✅ | `doc/adr/` |
 | Approvals for gated changes | ✅ | `doc/approvals.md` |
 | No invented scope/content | ✅ | Build what was asked; proposals before commits |
