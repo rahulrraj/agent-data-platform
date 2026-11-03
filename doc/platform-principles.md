@@ -8,6 +8,14 @@ where code lives and what may depend on what). This doc governs *platform
 qualities* — what the system must hold true regardless of where it runs or
 which model answers.
 
+## Contents
+
+- [1. Cloud agnostic](#1-cloud-agnostic)
+- [2. Resilient](#2-resilient)
+- [3. Multiple runtimes](#3-multiple-runtimes)
+- [4. Model agnostic](#4-model-agnostic)
+- [Conformance checklist](#conformance-checklist)
+
 ## 1. Cloud agnostic
 
 The platform runs on any cloud, or none. No cloud-provider SDKs, managed

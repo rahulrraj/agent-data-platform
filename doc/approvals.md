@@ -4,6 +4,13 @@ Principle: the agent proposes, Rahul disposes — for everything that changes
 what the agent can do, can reach, or costs. Routine work flows without
 ceremony.
 
+## Contents
+
+- [Approval matrix](#approval-matrix)
+- [The process](#the-process)
+- [What counts as approval](#what-counts-as-approval)
+- [Emergency path](#emergency-path)
+
 ## Approval matrix
 
 | Change | Needs Rahul's approval | How |

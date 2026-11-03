@@ -6,6 +6,49 @@ review. It describes the **fixed state** of this codebase, not just the
 problems: where a rule says "default X", that is what this project now
 does.
 
+## Contents
+
+- [How to use it](#how-to-use-it)
+- [1. Security defaults](#1-security-defaults)
+  - [1.1 Auth before exposure — never ship a public-by-default API](#11-auth-before-exposure--never-ship-a-public-by-default-api)
+  - [1.2 CORS is an allowlist, not a wildcard](#12-cors-is-an-allowlist-not-a-wildcard)
+  - [1.3 Secrets: sensitive flags, masked logs, no state in git](#13-secrets-sensitive-flags-masked-logs-no-state-in-git)
+  - [1.4 Read-only enforcement must be enforcement, not a label](#14-read-only-enforcement-must-be-enforcement-not-a-label)
+  - [1.5 Session isolation: the server owns identity, never the client](#15-session-isolation-the-server-owns-identity-never-the-client)
+  - [1.6 Encode and validate every value that reaches a downstream system](#16-encode-and-validate-every-value-that-reaches-a-downstream-system)
+- [2. Reliability](#2-reliability)
+  - [2.1 Retry classification must match the real SDK errors — and be tested](#21-retry-classification-must-match-the-real-sdk-errors--and-be-tested)
+  - [2.2 Bound every outbound call and every history](#22-bound-every-outbound-call-and-every-history)
+  - [2.3 Typed port errors on every boundary, not just the model one](#23-typed-port-errors-on-every-boundary-not-just-the-model-one)
+  - [2.4 Readiness must check what it claims; health is liveness only](#24-readiness-must-check-what-it-claims-health-is-liveness-only)
+  - [2.5 Session consistency: save before you call, persist partials](#25-session-consistency-save-before-you-call-persist-partials)
+  - [2.6 Embedding-cache care: validate what you reuse](#26-embedding-cache-care-validate-what-you-reuse)
+- [3. Delivery and deployment](#3-delivery-and-deployment)
+  - [3.1 State backend before the first deploy — not after](#31-state-backend-before-the-first-deploy--not-after)
+  - [3.2 Bootstrap ordering: create the target before you push to it](#32-bootstrap-ordering-create-the-target-before-you-push-to-it)
+  - [3.3 The image must contain what the app loads at startup](#33-the-image-must-contain-what-the-app-loads-at-startup)
+  - [3.4 Stack naming: stacks that can coexist must not collide](#34-stack-naming-stacks-that-can-coexist-must-not-collide)
+  - [3.5 UI/API wiring is part of the deploy, not an afterthought](#35-uiapi-wiring-is-part-of-the-deploy-not-an-afterthought)
+  - [3.6 Deploy gates: no auto-approve, no tag-pinned actions, no surprise applies](#36-deploy-gates-no-auto-approve-no-tag-pinned-actions-no-surprise-applies)
+- [4. API and data-access design](#4-api-and-data-access-design)
+  - [4.1 Validate at load, fail fast with a useful error](#41-validate-at-load-fail-fast-with-a-useful-error)
+  - [4.2 Parameter handling: coerce safely, cap results, never guess](#42-parameter-handling-coerce-safely-cap-results-never-guess)
+  - [4.3 Discovery: calibrate on real embeddings, with a margin](#43-discovery-calibrate-on-real-embeddings-with-a-margin)
+  - [4.4 Registry tooling: the draft→review→merge loop must be closed](#44-registry-tooling-the-draftreviewmerge-loop-must-be-closed)
+- [5. UI resilience](#5-ui-resilience)
+  - [5.1 Partial + error is one state, not two failure modes](#51-partial--error-is-one-state-not-two-failure-modes)
+  - [5.2 Storage safety: validate on load, guard every write, cap growth](#52-storage-safety-validate-on-load-guard-every-write-cap-growth)
+  - [5.3 Health polling: distinguish checking, connected, and stale](#53-health-polling-distinguish-checking-connected-and-stale)
+  - [5.4 Stream framing: parse per the SSE spec, clean up the reader](#54-stream-framing-parse-per-the-sse-spec-clean-up-the-reader)
+- [6. Architecture hygiene](#6-architecture-hygiene)
+  - [6.1 One composition root — and only one](#61-one-composition-root--and-only-one)
+  - [6.2 Env handling: settings own the environment, adapters never touch it](#62-env-handling-settings-own-the-environment-adapters-never-touch-it)
+  - [6.3 Port conformance must be checkable, not duck-typed](#63-port-conformance-must-be-checkable-not-duck-typed)
+  - [6.4 Tool plugin conventions: self-contained, discovered, typed](#64-tool-plugin-conventions-self-contained-discovered-typed)
+  - [6.5 Parallel vs. sequential must be pinned, not inherited from SDK defaults](#65-parallel-vs-sequential-must-be-pinned-not-inherited-from-sdk-defaults)
+- [7. What this doc deliberately does NOT cover](#7-what-this-doc-deliberately-does-not-cover)
+- [8. Known open items — not decided here](#8-known-open-items--not-decided-here)
+
 ## How to use it
 
 - Read it once before scaffolding a new project; then work through the

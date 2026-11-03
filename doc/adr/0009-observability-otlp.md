@@ -4,9 +4,16 @@ Date: 2026-11-03
 
 Status: **Accepted 2026-11-03 — implemented 2026-11-03** (Strands-native
 telemetry via the global provider, service turn spans, capability spans,
-FastAPI/HTTPX instrumentation, Lambda flush; local only, not pushed or
+FastAPI/HTTPX instrumentation, Lambda flush; pushed 2026-11-03; not
 deployed). No backend is configured: the backend choice is still open,
 and nothing has been verified against a real collector.
+
+## Contents
+
+- [Context](#context)
+- [Decision](#decision)
+- [Consequences](#consequences)
+- [Open items (need a real backend / Rahul)](#open-items-need-a-real-backend--rahul)
 
 ## Context
 

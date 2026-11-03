@@ -3,6 +3,22 @@
 How the agent reaches organization data (Snowflake, SQL Server, REST APIs)
 without hardcoded per-entity tools. See ADR 0002 for the decision record.
 
+## Contents
+
+- [Concepts](#concepts)
+- [Capability granularity](#capability-granularity)
+- [Registry format](#registry-format)
+  - [Trimming large HTTP responses](#trimming-large-http-responses)
+  - [Forwarding the user's token (HTTP only)](#forwarding-the-users-token-http-only)
+- [Connections](#connections)
+- [Flow](#flow)
+- [Generating from Swagger](#generating-from-swagger)
+- [What the model sees](#what-the-model-sees)
+- [Embedding cache](#embedding-cache)
+- [Prerequisites](#prerequisites)
+- [Guardrails](#guardrails)
+- [Access](#access)
+
 ## Concepts
 
 - **Capability** — one named, parameterized way to reach one data source.

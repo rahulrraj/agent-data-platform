@@ -3,6 +3,15 @@
 What constrains the agent today, and what is still planned. Status is
 honest: ✅ enforced in code · 🟡 partial/documented · ❌ planned, not built.
 
+## Contents
+
+- [1. Input guardrails](#1-input-guardrails)
+- [2. Tool and data guardrails](#2-tool-and-data-guardrails)
+- [3. Model guardrails](#3-model-guardrails)
+- [4. Operational guardrails](#4-operational-guardrails)
+- [5. Development guardrails](#5-development-guardrails)
+- [Reading this table](#reading-this-table)
+
 ## 1. Input guardrails
 
 | Guardrail | Status | Notes |

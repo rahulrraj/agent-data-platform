@@ -3,6 +3,19 @@
 How agent work moves from idea to running system. Small fixes may skip
 stages; anything that changes what the agent can do or reach may not.
 
+## Contents
+
+- [Stages and gates](#stages-and-gates)
+  - [1. Propose](#1-propose)
+  - [2. Design](#2-design)
+  - [3. Build](#3-build)
+  - [4. Test](#4-test)
+  - [5. Evaluate](#5-evaluate)
+  - [6. Review & approve](#6-review--approve)
+  - [7. Deploy](#7-deploy)
+  - [8. Operate](#8-operate)
+- [Checklist (copy into the change)](#checklist-copy-into-the-change)
+
 ## Stages and gates
 
 ### 1. Propose

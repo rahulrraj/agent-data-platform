@@ -4,6 +4,16 @@ React chat interface for the Agent API — ChatGPT-style layout, Claude-style
 warmth, Gemini-style accents. Streams replies token-by-token over `/api/chat`
 (SSE) and shows tool usage inline.
 
+## Contents
+
+- [Run it](#run-it)
+- [Authentication (ADR 0008)](#authentication-adr-0008)
+- [Deployment: the UI image needs an `/api` route in front of it](#deployment-the-ui-image-needs-an-api-route-in-front-of-it)
+- [Local vs server history (M-28)](#local-vs-server-history-m-28)
+- [What it does](#what-it-does)
+- [Tests](#tests)
+- [Layout](#layout)
+
 ## Run it
 
 ```bash

@@ -4,6 +4,25 @@ Infrastructure as code for the AWS deployment paths. The app itself is
 platform-agnostic — one container image plus env vars — so each platform
 stack runs the same image and only differs in how it is hosted.
 
+## Contents
+
+- [Layout](#layout)
+- [Prerequisites](#prerequisites)
+- [State backend](#state-backend)
+- [Lambda stack: auth, CORS, and secrets](#lambda-stack-auth-cors-and-secrets)
+- [RDS posture](#rds-posture)
+- [Stack tuning knobs (m-20)](#stack-tuning-knobs-m-20)
+- [Lambda concurrency vs RDS (m-32)](#lambda-concurrency-vs-rds-m-32)
+- [Networking: NAT, endpoints, validation](#networking-nat-endpoints-validation)
+- [Frontend module (m-28)](#frontend-module-m-28)
+- [ECR tags and rollback (m-29)](#ecr-tags-and-rollback-m-29)
+- [First deployment (manual, no pipeline)](#first-deployment-manual-no-pipeline)
+- [GitHub Actions + OIDC (pipeline prerequisites)](#github-actions--oidc-pipeline-prerequisites)
+- [How the pipelines wire the UI to the API](#how-the-pipelines-wire-the-ui-to-the-api)
+- [How to extend: adding a platform (GCP and beyond)](#how-to-extend-adding-a-platform-gcp-and-beyond)
+- [TODO: deployment strategies (future work, not implemented)](#todo-deployment-strategies-future-work-not-implemented)
+- [Known follow-ups (not built here)](#known-follow-ups-not-built-here)
+
 ## Layout
 
 ```text

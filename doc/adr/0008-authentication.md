@@ -3,11 +3,18 @@
 Date: 2026-11-03
 
 Status: **Accepted 2026-11-03 — implemented 2026-11-03** (backend
-auth, token forwarding, UI login gate; local only, not pushed or
+auth, token forwarding, UI login gate; pushed 2026-11-03; not
 deployed). Live verification against a real Okta tenant is still
 pending: live login, real JWKS, real token forwarding.
 Provider decision resolved 2026-11-03: Okta first, extendable (see
 decision 1).
+
+## Contents
+
+- [Context](#context)
+- [Decision](#decision)
+- [Consequences](#consequences)
+- [Open decisions (need Rahul)](#open-decisions-need-rahul)
 
 ## Context
 

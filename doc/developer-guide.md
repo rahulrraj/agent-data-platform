@@ -5,6 +5,15 @@ the quirks of the dev VM. The mandatory rules live in `AGENTS.md`;
 this doc holds the detail behind them. Keep it current when the code
 changes.
 
+## Contents
+
+- [Layout](#layout)
+- [Tools](#tools)
+- [Data capabilities](#data-capabilities)
+- [Providers and frameworks](#providers-and-frameworks)
+- [Resilience and operations](#resilience-and-operations)
+- [Sandbox quirks (this dev VM only)](#sandbox-quirks-this-dev-vm-only)
+
 ## Layout
 
 This repo follows `doc/hexagonal-architecture.md` for *structure* and

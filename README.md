@@ -7,6 +7,25 @@ SQL Server, REST APIs) discovered at runtime. Switch the agent framework
 service never knows which is running. The agent answers questions with tools,
 including organization data discovered by meaning from the capability registry.
 
+## Contents
+
+- [System overview](#system-overview)
+- [How a question is answered](#how-a-question-is-answered)
+- [How data capabilities are discovered and run](#how-data-capabilities-are-discovered-and-run)
+- [Layers and dependency rules](#layers-and-dependency-rules)
+- [Switching framework and model](#switching-framework-and-model)
+- [Resilience](#resilience)
+- [Observability (OTLP tracing, ADR 0009)](#observability-otlp-tracing-adr-0009)
+- [Run it](#run-it)
+- [Web UI](#web-ui)
+- [Deploy on Kubernetes](#deploy-on-kubernetes)
+- [Run on AWS Lambda](#run-on-aws-lambda)
+- [Configure](#configure)
+- [API](#api)
+- [Project map](#project-map)
+- [Docs](#docs)
+- [Principles in one line each](#principles-in-one-line-each)
+
 ## System overview
 
 ```mermaid
@@ -410,15 +429,20 @@ doc/
 
 ## Docs
 
+Full index: [`doc/README.md`](doc/README.md). Every document carries its
+own `Contents` section at the top, except the short ADRs.
+
 | Doc | What it is |
 | --- | ---------- |
 | `doc/hexagonal-architecture.md` | Structure rules: layers, ports, dependency directions (from the original Drive doc) |
 | `doc/platform-principles.md` | Platform qualities: cloud-agnostic, resilient, multi-runtime, model-agnostic + conformance checklist |
+| `doc/architecture-reference.md` | Checklist distilled from building this platform, for the next project |
 | `doc/data-capabilities.md` | Registry format, discovery/execution flow, guardrails, access model |
 | `doc/agent-lifecycle.md` | ADLC: stages, gates, and the ship checklist |
 | `doc/guardrails.md` | Guardrail catalog — enforced vs. planned, honestly marked |
 | `doc/approvals.md` | Approval matrix, what counts as approval, emergency path |
-| `doc/adr/` | Decision records: 0001 tools folder · 0002 capability registry · 0003 dual frameworks · 0004 no composites |
+| `doc/developer-guide.md` | Working notes: layout, conventions, operations, sandbox quirks |
+| `doc/adr/` | Decision records: 0001 tools folder · 0002 capability registry · 0003 dual frameworks · 0004 no composites · 0005 proxy strip · 0006 shared executor base · 0007 dynamic model selection · 0008 authentication · 0009 OTLP observability |
 
 ## Principles in one line each
 

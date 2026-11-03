@@ -5,6 +5,16 @@ not in scattered docs. Remove an item when it is done — don't just check it
 off. Items marked **blocked** need something outside this repo before they
 can move.
 
+## Contents
+
+- [Done recently](#done-recently-kept-here-until-the-next-push-so-nothing-gets-lost)
+- [Live tests and verification](#live-tests-and-verification)
+- [Deployment and infrastructure](#deployment-and-infrastructure)
+- [Capabilities and guardrails](#capabilities-and-guardrails)
+- [Observability](#observability-implemented-2026-11-03-adr-0009)
+- [Agent interoperability](#agent-interoperability)
+- [Platform hardening](#platform-hardening)
+
 ## Done recently (kept here until the next push, so nothing gets lost)
 
 - Terraform + GitHub Actions pipeline (commit `0ad2e20`): modular Terraform

@@ -8,6 +8,28 @@
 > **Basis:** Pragmatic **Hexagonal/Clean Architecture** with **DDD tactical patterns**.  
 > **Purpose:** Default cross-project architecture for developers and coding agents. Optimize for predictable placement, one-way dependencies, replaceable infrastructure, testability, and minimal ceremony.  
 > **Change policy:** MAJOR = dependency or placement rule changes; MINOR = backward-compatible clarifications/examples; PATCH = editorial fixes. Changes require approval from the architecture owner or delegated maintainers.
+
+## Contents
+
+- [1. Core Model](#1-core-model)
+- [2. Default Structure](#2-default-structure)
+- [3. Responsibilities and Call Rules](#3-responsibilities-and-call-rules)
+  - [Mandatory direction](#mandatory-direction)
+- [4. Ports, Repositories, Integrations, and Mappers](#4-ports-repositories-integrations-and-mappers)
+  - [Ports are required for outbound I/O](#ports-are-required-for-outbound-io)
+  - [Mapper placement](#mapper-placement)
+- [5. Transactions and Errors](#5-transactions-and-errors)
+- [6. Workflows and Frameworks](#6-workflows-and-frameworks)
+- [7. Platform and Configuration](#7-platform-and-configuration)
+- [8. Multiple Runtimes and Feature Packaging](#8-multiple-runtimes-and-feature-packaging)
+- [9. Testing and Enforcement](#9-testing-and-enforcement)
+- [10. Worked Examples](#10-worked-examples)
+  - [10.1 API Example](#101-api-example)
+  - [10.2 ETL / Batch Example](#102-etl--batch-example)
+- [11. Placement Test](#11-placement-test)
+- [12. Coding-Agent Checklist](#12-coding-agent-checklist)
+- [13. Project Profiles](#13-project-profiles)
+
 ## 1. Core Model
 Keep application behavior independent of runtimes, frameworks, databases, vendors, and deployment technology.
 ```text
