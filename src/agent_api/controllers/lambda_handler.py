@@ -57,6 +57,7 @@ from typing import Any
 from mangum import Mangum
 
 from agent_api.composition import build_app
+from agent_api.platform.telemetry import flush_telemetry
 
 _mangum: Mangum | None = None
 
@@ -75,5 +76,14 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     Delegates to Mangum, which translates the Lambda event into an ASGI
     scope for the FastAPI app and converts the response back into the
     standard proxy dict: statusCode, headers, body, isBase64Encoded.
+
+    Telemetry flush (ADR 0009): the invocation's spans are forced out
+    in a finally block, because a frozen execution environment may
+    never run a batch exporter's background thread again. The flush
+    is a safe no-op off Lambda / when telemetry is unconfigured, and
+    it never masks the invocation's own result.
     """
-    return _get_mangum()(event, context)
+    try:
+        return _get_mangum()(event, context)
+    finally:
+        flush_telemetry()

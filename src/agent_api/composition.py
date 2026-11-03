@@ -45,6 +45,7 @@ from agent_api.config.settings import Settings
 from agent_api.controllers.http import create_app
 from agent_api.domain.prompts import build_system_prompt
 from agent_api.platform.retry import RetryPolicy
+from agent_api.platform.telemetry import setup_telemetry
 from agent_api.ports.conversation_repository import ConversationRepository
 from agent_api.ports.model_gateway import ModelGateway, ModelGatewayError
 from agent_api.ports.token_validator import TokenValidator
@@ -233,6 +234,19 @@ class ModelGatewayFactory:
         """Caller-facing keys, with "default" first."""
         return ("default",) + tuple(self._settings.allowed_models)
 
+    def describe(self, key: str | None) -> tuple[str, str] | None:
+        """The (provider, model id) behind `key` (ADR 0009).
+
+        None/"default" is the configured provider + model. Unknown
+        keys return None — the caller rejected them already.
+        """
+        if key is None or key == "default":
+            return (self._settings.provider, self._default_model())
+        choice = self._settings.allowed_models.get(key)
+        if choice is None:
+            return None
+        return (choice.provider, choice.model)
+
     def _default_model(self) -> str:
         return {
             "ollama": self._settings.ollama_model,
@@ -374,9 +388,18 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         embedding_gateway=deps.embedding_gateway,
         capability_registry=deps.capability_registry,
     )
-    return create_app(
+    app = create_app(
         service, model_label=model_label(settings),
         cors_origins=settings.cors_origins,
         model_keys=factory.available_keys,
         token_validator=_build_token_validator(settings),
     )
+    # Telemetry (ADR 0009) is wired here, after the app exists but
+    # before any gateway or agent is constructed: gateways build
+    # lazily on first request, and Strands binds the global tracer
+    # provider when its tracer is first created, so setup here covers
+    # every turn. With no OTLP endpoint configured this is a no-op
+    # (and enforces content redaction regardless) and must never fail
+    # startup.
+    setup_telemetry(lambda_runtime=settings.lambda_runtime, app=app)
+    return app

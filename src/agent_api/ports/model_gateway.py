@@ -62,3 +62,14 @@ class ModelGatewayResolver(Protocol):
         use. Construction failures surface as ModelGatewayError (a
         per-request 502), never as a startup error."""
         ...
+
+    def describe(self, key: str | None) -> tuple[str, str] | None:
+        """The (provider, model id) behind `key`, for span attribution.
+
+        Returns None when the key is unknown (the caller already
+        rejected it) — attribution is best-effort and must never fail
+        a turn. Added for ADR 0009: the turn span records which
+        provider/model served it without the service knowing the
+        matrix.
+        """
+        ...
