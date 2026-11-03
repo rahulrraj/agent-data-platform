@@ -44,6 +44,15 @@ can move.
 - **`nomic-embed-text` install for live Ollama discovery** — Ollama
   capability discovery is test-only today (deterministic fake embeddings);
   the real embedding model is not installed in Rahul's Ollama.
+- **Live Okta verification (auth, ADR 0008)** — the implementation is
+  unit-tested only (locally generated keys, stubbed JWKS). Still
+  unverified against a real Okta tenant: live login redirect +
+  callback, real discovery document and JWKS-backed tokens through the
+  composed app, refresh-token issuance/rotation and silent renewal,
+  the registered redirect URI working end to end, and the Function
+  URL `NONE` + CloudFront + WAF front-door interplay. Needs Rahul's
+  Okta tenant (issuer, client id, redirect URI registered) and a run
+  of the UI + API against it. Cannot be done from this VM.
 
 ## Deployment and infrastructure
 
