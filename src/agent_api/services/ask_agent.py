@@ -33,7 +33,10 @@ import threading
 from dataclasses import dataclass
 from typing import AsyncIterator
 
+from opentelemetry.trace import Status, StatusCode
+
 from agent_api.domain.conversation import Conversation, ToolResult
+from agent_api.platform import telemetry
 from agent_api.platform.request_context import request_context
 from agent_api.ports.capability_repository import (
     CapabilityRepository,
@@ -55,6 +58,13 @@ from agent_api.ports.model_gateway import (
 # enough for real follow-ups, small enough to stay inside small-model
 # context windows. Stored history is NOT truncated — see module docstring.
 MAX_HISTORY_TURNS = 40
+
+# One span per turn (ADR 0009), named from our own vocabulary so alerts
+# survive a framework switch: framework spans (Strands invoke_agent /
+# execute_tool, LangGraph nodes) nest under it. No message content is
+# ever recorded here — only ids, counts, and lengths. With no tracer
+# provider configured this is a silent no-op.
+_TRACER = telemetry.get_tracer("agent_api.services.ask_agent")
 
 PARTIAL_MARKER = "[partial response — stream interrupted]"
 
@@ -121,6 +131,48 @@ class AskAgentService:
         self._locks_guard = threading.Lock()
 
     # -- model resolution --------------------------------------------------
+
+    def _describe_model(self, model: str | None) -> tuple[str, str] | None:
+        """Best-effort (provider, model id) for the turn span.
+
+        The resolver grew this method in ADR 0009; duck-typed fakes
+        that predate it simply yield no provider/model attributes
+        rather than failing the turn.
+        """
+        resolver = self._gateway_resolver
+        if resolver is None:
+            return None
+        describe = getattr(resolver, "describe", None)
+        if describe is None:
+            return None
+        return describe(model)
+
+    def _turn_attributes(
+        self,
+        conversation_id: str,
+        model: str | None,
+        principal: str | None,
+    ) -> dict:
+        """Attributes for the `agent.turn` span (ADR 0009).
+
+        Ids, counts, and lengths only — never message content, never
+        the bearer token. The principal is the authenticated `sub`
+        from the request context; anonymous turns carry no enduser.id.
+        Token usage and stop reason are deliberately NOT recorded
+        here: the gateway result type exposes neither, and inventing
+        them would be worse than omitting them (Strands' own
+        invoke_agent span carries the real gen_ai.usage.* values).
+        """
+        attributes: dict = {
+            "agent.session.id": conversation_id,
+            "agent.model.key": model or "default",
+        }
+        described = self._describe_model(model)
+        if described is not None:
+            attributes["agent.model.provider"], attributes["agent.model.id"] = described
+        if principal is not None:
+            attributes["enduser.id"] = principal
+        return attributes
 
     def _resolve_gateway(self, model: str | None) -> ModelGateway:
         """The gateway for a requested model key.
@@ -245,16 +297,29 @@ class AskAgentService:
             # Persist the user turn before the gateway runs (see module
             # docstring): a gateway failure must not diverge backends.
             self._save(conversation)
-            try:
-                gateway = self._resolve_gateway(model)
-                with request_context(principal, user_token):
-                    turn = gateway.generate(self._gateway_conversation(conversation))
-            except ModelGatewayError as exc:
-                raise AgentServiceError(str(exc)) from exc
-            conversation.add_assistant(
-                turn.content, turn.tool_uses, turn.tool_results
-            )
-            self._save(conversation)
+            gateway = self._resolve_gateway(model)
+            # The span covers gateway execution + the assistant save;
+            # validation errors above it carry no span (nothing ran).
+            with _TRACER.start_as_current_span(
+                "agent.turn",
+                attributes=self._turn_attributes(conversation_id, model, principal),
+            ) as span:
+                try:
+                    with request_context(principal, user_token):
+                        turn = gateway.generate(
+                            self._gateway_conversation(conversation)
+                        )
+                except ModelGatewayError as exc:
+                    span.set_status(Status(StatusCode.ERROR))
+                    span.record_exception(exc)
+                    raise AgentServiceError(str(exc)) from exc
+                span.set_attribute("agent.tools", list(turn.tool_uses))
+                span.set_attribute("agent.tool.count", len(turn.tool_uses))
+                span.set_attribute("agent.reply.length", len(turn.content))
+                conversation.add_assistant(
+                    turn.content, turn.tool_uses, turn.tool_results
+                )
+                self._save(conversation)
             return AgentReply(text=turn.content, tool_uses=turn.tool_uses)
 
     async def ask_stream(
@@ -289,46 +354,65 @@ class AskAgentService:
             try:
                 conversation = self._validated(conversation_id, message, principal)
                 self._save(conversation)  # user turn, before the gateway
-                try:
-                    gateway = self._resolve_gateway(model)
-                    with request_context(principal, user_token):
-                        async for chunk in gateway.stream(
-                            self._gateway_conversation(conversation)
-                        ):
-                            if chunk.kind == "text":
-                                texts.append(chunk.payload)
-                            elif chunk.kind == "tool":
-                                # Nit: tool chunks used to be yielded on
-                                # every occurrence while saved history
-                                # deduped by name — raw SSE consumers saw
-                                # repeats the UI hid. Yield each tool name
-                                # once, matching the saved-history dedup.
-                                if chunk.payload in tools:
-                                    continue
-                                tools.append(chunk.payload)
-                            elif chunk.kind == "tool_result":
-                                try:
-                                    data = json.loads(chunk.payload)
-                                    tool_results.append(
-                                        ToolResult(
-                                            tool=data["tool"], result=data["result"]
+                gateway = self._resolve_gateway(model)
+                # The span stays open across yields, so a turn's wall
+                # time (including a slow consumer) is its span duration.
+                with _TRACER.start_as_current_span(
+                    "agent.turn",
+                    attributes=self._turn_attributes(
+                        conversation_id, model, principal
+                    ),
+                ) as span:
+                    try:
+                        with request_context(principal, user_token):
+                            async for chunk in gateway.stream(
+                                self._gateway_conversation(conversation)
+                            ):
+                                if chunk.kind == "text":
+                                    texts.append(chunk.payload)
+                                elif chunk.kind == "tool":
+                                    # Nit: tool chunks used to be yielded on
+                                    # every occurrence while saved history
+                                    # deduped by name — raw SSE consumers saw
+                                    # repeats the UI hid. Yield each tool name
+                                    # once, matching the saved-history dedup.
+                                    if chunk.payload in tools:
+                                        continue
+                                    tools.append(chunk.payload)
+                                elif chunk.kind == "tool_result":
+                                    try:
+                                        data = json.loads(chunk.payload)
+                                        tool_results.append(
+                                            ToolResult(
+                                                tool=data["tool"], result=data["result"]
+                                            )
                                         )
-                                    )
-                                except (ValueError, KeyError, TypeError):
-                                    pass
-                            yield chunk
-                except ModelGatewayError as exc:
-                    # Persist the partial answer with its marker, then
-                    # report the failure (partial save is best-effort:
-                    # the gateway error is the one the caller must see).
-                    if conversation is not None and (texts or tools or tool_results):
-                        self._persist_partial(conversation, texts, tools, tool_results)
-                        saved = True
-                    raise AgentServiceError(str(exc)) from exc
-                conversation.add_assistant("".join(texts), tools, tool_results)
-                assistant_appended = True
-                self._save(conversation)
-                saved = True
+                                    except (ValueError, KeyError, TypeError):
+                                        pass
+                                yield chunk
+                    except GeneratorExit:
+                        # Consumer went away mid-turn; the outer finally
+                        # persists the partial answer. Mark the span so
+                        # an aborted turn is not read as a completed one.
+                        span.set_attribute("agent.turn.aborted", True)
+                        raise
+                    except ModelGatewayError as exc:
+                        span.set_status(Status(StatusCode.ERROR))
+                        span.record_exception(exc)
+                        # Persist the partial answer with its marker, then
+                        # report the failure (partial save is best-effort:
+                        # the gateway error is the one the caller must see).
+                        if conversation is not None and (texts or tools or tool_results):
+                            self._persist_partial(conversation, texts, tools, tool_results)
+                            saved = True
+                        raise AgentServiceError(str(exc)) from exc
+                    span.set_attribute("agent.tools", list(tools))
+                    span.set_attribute("agent.tool.count", len(tools))
+                    span.set_attribute("agent.reply.length", len("".join(texts)))
+                    conversation.add_assistant("".join(texts), tools, tool_results)
+                    assistant_appended = True
+                    self._save(conversation)
+                    saved = True
             finally:
                 lock.release()
         finally:

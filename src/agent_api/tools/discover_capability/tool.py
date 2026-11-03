@@ -56,8 +56,15 @@ import threading
 from strands import tool
 
 from agent_api.domain.capability import cosine_similarity
+from agent_api.platform import telemetry
 from agent_api.ports.embedding_cache import CachedEmbedding
 from agent_api.ports.embedding_gateway import DEFAULT_SIMILARITY_THRESHOLD
+
+# Capability spans (ADR 0009). This is a deliberate exception to the
+# "tool functions stay pure" rule: no other seam sees the match score
+# or the ambiguity decision. The span records ids and scores only —
+# never the query text, which may contain user data.
+_TRACER = telemetry.get_tracer("agent_api.tools.discover_capability")
 
 _MARGIN = 0.05  # best minus second-best <= this -> return top 2 with scores
 
@@ -232,45 +239,53 @@ def create_tool(deps):
                 "Data capability lookup is temporarily unavailable: "
                 f"{exc}. Say you cannot look it up."
             )
-        try:
-            scored = sorted(
-                (
-                    (cap, cosine_similarity(query_vector, vector))
-                    for cap, vector in index
-                ),
-                key=lambda item: item[1],
-                reverse=True,
-            )
-        except ValueError:
-            # m-16a: the query vector's dimension disagrees with the
-            # index (embedding model changed). Drop the stale index so
-            # the next call re-embeds, and report unavailability now
-            # instead of a wrong ranking.
-            cache.pop("vectors", None)
-            return (
-                "Data capability lookup is temporarily unavailable: "
-                "embedding dimension mismatch. Say you cannot look it up."
-            )
-        best, best_score = scored[0]
-        if best_score < similarity_threshold:
-            return "No data capability matches that need. Say you cannot look it up."
-        if discovered is not None:
-            discovered.add(best.id)
-        if len(scored) > 1 and best_score - scored[1][1] <= _MARGIN:
-            # Near-tie: return both candidates with scores rather than
-            # forcing a single (possibly wrong) answer.
-            second, second_score = scored[1]
+        with _TRACER.start_as_current_span("capability.resolve") as span:
+            try:
+                scored = sorted(
+                    (
+                        (cap, cosine_similarity(query_vector, vector))
+                        for cap, vector in index
+                    ),
+                    key=lambda item: item[1],
+                    reverse=True,
+                )
+            except ValueError:
+                # m-16a: the query vector's dimension disagrees with the
+                # index (embedding model changed). Drop the stale index so
+                # the next call re-embeds, and report unavailability now
+                # instead of a wrong ranking.
+                span.set_attribute("capability.matched", False)
+                cache.pop("vectors", None)
+                return (
+                    "Data capability lookup is temporarily unavailable: "
+                    "embedding dimension mismatch. Say you cannot look it up."
+                )
+            best, best_score = scored[0]
+            if best_score < similarity_threshold:
+                span.set_attribute("capability.matched", False)
+                return "No data capability matches that need. Say you cannot look it up."
+            span.set_attribute("capability.matched", True)
+            span.set_attribute("capability.id", best.id)
+            span.set_attribute("capability.match_score", float(best_score))
             if discovered is not None:
-                discovered.add(second.id)
-            return json.dumps(
-                {
-                    "ambiguous": True,
-                    "candidates": [
-                        _capability_json(best, best_score),
-                        _capability_json(second, second_score),
-                    ],
-                }
-            )
-        return json.dumps(_capability_json(best, best_score))
+                discovered.add(best.id)
+            if len(scored) > 1 and best_score - scored[1][1] <= _MARGIN:
+                # Near-tie: return both candidates with scores rather than
+                # forcing a single (possibly wrong) answer.
+                span.set_attribute("capability.ambiguous", True)
+                second, second_score = scored[1]
+                if discovered is not None:
+                    discovered.add(second.id)
+                return json.dumps(
+                    {
+                        "ambiguous": True,
+                        "candidates": [
+                            _capability_json(best, best_score),
+                            _capability_json(second, second_score),
+                        ],
+                    }
+                )
+            span.set_attribute("capability.ambiguous", False)
+            return json.dumps(_capability_json(best, best_score))
 
     return discover_capability

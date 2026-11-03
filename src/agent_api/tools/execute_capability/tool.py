@@ -24,7 +24,37 @@ import json
 
 from strands import tool
 
+from opentelemetry.trace import Status, StatusCode
+
+from agent_api.platform import telemetry
 from agent_api.ports.capability_executor import CapabilityExecutorError
+
+# Capability spans (ADR 0009). This is a deliberate exception to the
+# "tool functions stay pure" rule: no other seam sees the row counts
+# or the truncation flag. The span records ids and counts only —
+# never row contents or parameter values, which may carry secrets.
+_TRACER = telemetry.get_tracer("agent_api.tools.execute_capability")
+
+
+def _result_shape(result) -> tuple[int, bool]:
+    """(row count, truncated) for an executor result, without its contents.
+
+    The HTTP executor returns {"data": [...], "truncated": bool}; a
+    bare list is its own row count; anything else is one record
+    (None is zero). Only the envelope's truncated flag is reported.
+    """
+    if result is None:
+        return 0, False
+    if isinstance(result, dict):
+        data = result.get("data")
+        if isinstance(data, list):
+            return len(data), bool(result.get("truncated"))
+        if data is not None:
+            return 1, bool(result.get("truncated"))
+        return 1, False
+    if isinstance(result, list):
+        return len(result), False
+    return 1, False
 
 def _coerce_value(p_type: str, value):
     """Coerce a model-supplied value to the registry type, or None.
@@ -123,10 +153,25 @@ def create_tool(deps):
         executor = executors.get(capability.kind)
         if executor is None:
             return f"No executor configured for kind '{capability.kind}'."
-        try:
-            result = executor.execute(capability, coerced)
-        except CapabilityExecutorError as exc:
-            return f"Capability failed: {exc}"
+        with _TRACER.start_as_current_span(
+            "capability.execute",
+            attributes={
+                "capability.id": capability.id,
+                "capability.kind": capability.kind,
+            },
+        ) as span:
+            try:
+                result = executor.execute(capability, coerced)
+            except CapabilityExecutorError as exc:
+                # The tool contract stays a string error (the model can
+                # retry); the span still records the failure so failed
+                # executions are visible in error views.
+                span.set_status(Status(StatusCode.ERROR))
+                span.record_exception(exc)
+                return f"Capability failed: {exc}"
+            rows, truncated = _result_shape(result)
+            span.set_attribute("capability.rows", rows)
+            span.set_attribute("capability.truncated", truncated)
         return json.dumps(result, default=str)
 
     return execute_capability
