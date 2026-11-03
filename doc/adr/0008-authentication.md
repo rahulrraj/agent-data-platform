@@ -3,6 +3,8 @@
 Date: 2026-11-03
 
 Status: **Proposed — awaiting Rahul's approval. Nothing is implemented.**
+Provider decision resolved 2026-11-03: Okta first, extendable (see
+decision 1).
 
 ## Context
 
@@ -31,11 +33,15 @@ propagates end to end, UI → agent API → downstream data API.
 
 ## Decision
 
-1. **OIDC, identity-provider-agnostic.** The UI authenticates with the
-   standard Authorization Code flow + PKCE against an OIDC provider
-   chosen at deployment time (issuer, client id, audience via config).
-   No provider is named here; the API validates standard JWTs against
-   the provider's JWKS. The provider choice is open decision 1 below.
+1. **OIDC, Okta first, extendable.** The UI authenticates with the
+   standard Authorization Code flow + PKCE. **Okta is the first
+   identity provider (decided 2026-11-03)**, but the design stays
+   provider-agnostic: the API validates standard JWTs against the
+   provider's JWKS, and issuer, client id, and audience come from
+   config. All Okta specifics live in configuration (and, if needed, a
+   thin provider adapter) — never in the controller, service, or
+   executor code — so adding a second provider later is a config
+   change, not a core change.
 2. **The UI forces authentication.** No token means the login flow —
    no API calls are made unauthenticated. Every call carries
    `Authorization: Bearer <token>` (health/ready excepted, see 6). A
@@ -111,14 +117,15 @@ propagates end to end, UI → agent API → downstream data API.
 
 ## Open decisions (need Rahul)
 
-1. Identity provider: Cognito, Auth0, Google, another — or confirm
-   IdP-agnostic and decide at deploy time.
-2. The `api_key` + `forward_user_token` load-time error rule
+1. The `api_key` + `forward_user_token` load-time error rule
    (decision 5) — confirm, or choose precedence instead (e.g. the
    user token wins, or the static key wins).
-3. The fail-closed startup rule (decision 3) — confirm, or allow
+2. The fail-closed startup rule (decision 3) — confirm, or allow
    unauthenticated local runs without the explicit opt-out.
-4. Machine-client flow: client-credentials via the IdP (decision 6) —
+3. Machine-client flow: client-credentials via the IdP (decision 6) —
    confirm, or keep an API-key path for service callers.
-5. UI token storage (`sessionStorage` + silent renewal, decision 2) —
+4. UI token storage (`sessionStorage` + silent renewal, decision 2) —
    confirm.
+
+Resolved 2026-11-03: identity provider — Okta first, with the
+extendability requirement in decision 1.

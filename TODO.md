@@ -87,10 +87,12 @@ can move.
   approval — nothing implemented)** — UI forces login (OIDC, code +
   PKCE), token on every call, session→principal binding (403 on
   mismatch), per-capability opt-in token forwarding to downstream HTTP
-  APIs (`forward_user_token`). Five open decisions in the ADR (IdP,
-  api_key-vs-forwarding rule, fail-closed startup, machine-client
-  flow, UI token storage). This unblocks `allowed_roles` and the
-  C-1 × C-5 browser/UI tension; identity first, authorization later.
+  APIs (`forward_user_token`). Provider decided 2026-11-03: Okta first,
+  extendable (generic OIDC path; Okta specifics in config/adapter
+  only). Four open decisions left in the ADR (api_key-vs-forwarding
+  rule, fail-closed startup, machine-client flow, UI token storage).
+  This unblocks `allowed_roles` and the C-1 × C-5 browser/UI tension;
+  identity first, authorization later.
 - **Structured audit log of capability executions** — planned. Today this
   means application logs only.
 - **Output filtering, token budgets, input size cap, injection handling**
