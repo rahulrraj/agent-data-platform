@@ -179,6 +179,74 @@ def test_build_gateway_still_builds_default(monkeypatch):
     assert isinstance(gateway, OllamaModelGateway)
 
 
+# --- ADR 0008: token validator wiring (composition root only) ---
+
+def test_build_token_validator_none_when_auth_disabled(monkeypatch):
+    from agent_api.composition import _build_token_validator
+
+    monkeypatch.setenv("AUTH_DISABLED", "true")
+    assert _build_token_validator(Settings.from_env()) is None
+
+
+def test_build_token_validator_wired_when_issuer_configured(monkeypatch):
+    from agent_api.adapters.oidc_token_validator import OidcTokenValidator
+    from agent_api.composition import _build_token_validator
+
+    monkeypatch.delenv("AUTH_DISABLED", raising=False)
+    monkeypatch.setenv("AUTH_ISSUER", "https://example.okta.com")
+    monkeypatch.setenv("AUTH_AUDIENCE", "test-audience")
+    validator = _build_token_validator(Settings.from_env())
+    assert isinstance(validator, OidcTokenValidator)
+
+
+def test_build_app_enforces_auth_when_issuer_configured(monkeypatch, tmp_path):
+    # End to end through the composed app: with an issuer configured,
+    # /api/ask without a bearer token is 401 before any service work
+    # (no JWKS fetch happens — validation is never reached).
+    from fastapi.testclient import TestClient
+
+    from agent_api.composition import build_app
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME", raising=False)
+    monkeypatch.delenv("AUTH_DISABLED", raising=False)
+    monkeypatch.setenv("AUTH_ISSUER", "https://example.okta.com")
+    monkeypatch.setenv("AUTH_AUDIENCE", "test-audience")
+    monkeypatch.setenv("AGENT_MODEL_PROVIDER", "ollama")
+    monkeypatch.setenv("CONVERSATION_STORE", "memory")
+    monkeypatch.setenv("EMBEDDING_CACHE_PATH", str(tmp_path / "cache.db"))
+    monkeypatch.setenv(
+        "CAPABILITIES_PATH",
+        os.path.join(repo_root, "registry", "capabilities.yaml"),
+    )
+    client = TestClient(build_app(Settings.from_env()))
+    r = client.post("/api/ask", json={"message": "hi", "session_id": "s"})
+    assert r.status_code == 401
+
+
+def test_build_app_auth_disabled_reaches_service(monkeypatch, tmp_path):
+    # With the dev opt-out, the same call is NOT a 401: it reaches the
+    # service (and fails downstream at the model, which is not the
+    # auth layer's concern here).
+    from fastapi.testclient import TestClient
+
+    from agent_api.composition import build_app
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME", raising=False)
+    monkeypatch.setenv("AUTH_DISABLED", "true")
+    monkeypatch.setenv("AGENT_MODEL_PROVIDER", "ollama")
+    monkeypatch.setenv("CONVERSATION_STORE", "memory")
+    monkeypatch.setenv("EMBEDDING_CACHE_PATH", str(tmp_path / "cache.db"))
+    monkeypatch.setenv(
+        "CAPABILITIES_PATH",
+        os.path.join(repo_root, "registry", "capabilities.yaml"),
+    )
+    client = TestClient(build_app(Settings.from_env()))
+    r = client.post("/api/ask", json={"message": "hi", "session_id": "s"})
+    assert r.status_code != 401
+
+
 def test_build_app_wires_allowlist_and_rejects_unknown_key(monkeypatch, tmp_path):
     # End to end through the composed app: health lists the keys and an
     # unknown model key is a 400 — without ever calling a model.

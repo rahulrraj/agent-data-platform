@@ -109,3 +109,38 @@ def test_malformed_turn_shape_returns_empty_conversation(tmp_path):
         )
         conn.commit()
     assert repo.load("broken").turns == []
+
+
+# --- ADR 0008: conversation owner round-trips in the same column ---
+
+def test_owner_round_trip(repo):
+    conv = repo.load("s1")
+    conv.owner = "alice"
+    conv.add_user("hi")
+    repo.save(conv)
+    loaded = repo.load("s1")
+    assert loaded.owner == "alice"
+    assert [t.content for t in loaded.turns] == ["hi"]
+
+
+def test_legacy_bare_list_row_loads_with_no_owner(tmp_path):
+    # Rows written before ownership existed hold a bare turns list:
+    # they deserialize with owner None (claimable once, then bound).
+    import json
+    import sqlite3
+
+    repo = SqliteConversationRepository(str(tmp_path / "legacy.db"))
+    legacy = json.dumps([{"role": "user", "content": "old", "tool_uses": []}])
+    with sqlite3.connect(str(tmp_path / "legacy.db")) as conn:
+        conn.execute(
+            "INSERT INTO conversations (id, turns_json) VALUES (?, ?)",
+            ("old-session", legacy),
+        )
+        conn.commit()
+    loaded = repo.load("old-session")
+    assert loaded.owner is None
+    assert [t.content for t in loaded.turns] == ["old"]
+    # The next save rewrites the row in envelope form, claiming it.
+    loaded.owner = "alice"
+    repo.save(loaded)
+    assert repo.load("old-session").owner == "alice"

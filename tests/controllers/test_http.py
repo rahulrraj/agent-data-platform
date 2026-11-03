@@ -21,11 +21,16 @@ class FakeService(AskAgentService):
         self.reply = reply or AgentReply(text="hello back", tool_uses=("calculate",))
         self.error = error
         self.last_model = "unset"
+        self.last_principal = "unset"
+        self.last_user_token = "unset"
 
     def ask(
-        self, conversation_id: str, message: str, model: str | None = None
+        self, conversation_id: str, message: str, model: str | None = None,
+        principal: str | None = None, user_token: str | None = None,
     ) -> AgentReply:
         self.last_model = model
+        self.last_principal = principal
+        self.last_user_token = user_token
         if self.error:
             raise self.error
         if not message.strip():
@@ -33,9 +38,12 @@ class FakeService(AskAgentService):
         return self.reply
 
     async def ask_stream(
-        self, conversation_id: str, message: str, model: str | None = None
+        self, conversation_id: str, message: str, model: str | None = None,
+        principal: str | None = None, user_token: str | None = None,
     ):
         self.last_model = model
+        self.last_principal = principal
+        self.last_user_token = user_token
         if self.error:
             raise self.error
         if not message.strip():
@@ -233,9 +241,13 @@ class _ResetService(FakeService):
     def __init__(self):
         super().__init__()
         self.reset_calls = []
+        self.reset_principal = "unset"
 
-    def reset_session(self, conversation_id: str) -> None:
+    def reset_session(
+        self, conversation_id: str, principal: str | None = None
+    ) -> None:
         self.reset_calls.append(conversation_id)
+        self.reset_principal = principal
 
 
 def test_reset_session_endpoint():

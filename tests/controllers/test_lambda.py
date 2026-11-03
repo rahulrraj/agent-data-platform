@@ -32,7 +32,8 @@ class FakeService(AskAgentService):
         self.error = error
 
     def ask(
-        self, conversation_id: str, message: str, model: str | None = None
+        self, conversation_id: str, message: str, model: str | None = None,
+        principal: str | None = None, user_token: str | None = None,
     ) -> AgentReply:
         if self.error:
             raise self.error
@@ -41,7 +42,8 @@ class FakeService(AskAgentService):
         return self.reply
 
     async def ask_stream(
-        self, conversation_id: str, message: str, model: str | None = None
+        self, conversation_id: str, message: str, model: str | None = None,
+        principal: str | None = None, user_token: str | None = None,
     ):
         if self.error:
             raise self.error

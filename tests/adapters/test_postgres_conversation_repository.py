@@ -161,3 +161,43 @@ def test_corrupt_turns_returns_empty_conversation():
     assert (
         PostgresConversationRepository._load("s", [{"role": "user"}]).turns == []
     )
+
+
+# --- ADR 0008: conversation owner round-trips in the same column ---
+
+def test_owner_round_trip(fake_pg):
+    repo = PostgresConversationRepository("postgres://test")
+    conv = Conversation(id="s1", owner="alice")
+    conv.add_user("hi")
+    repo.save(conv)
+    loaded = repo.load("s1")
+    assert loaded.owner == "alice"
+    assert [t.content for t in loaded.turns] == ["hi"]
+
+
+def test_legacy_bare_list_row_loads_with_no_owner():
+    # Rows written before ownership existed hold a bare turns list
+    # (psycopg returns JSONB as native Python objects): owner None,
+    # claimable once by the first authenticated writer.
+    from agent_api.adapters.postgres_conversation_repository import (
+        PostgresConversationRepository,
+    )
+
+    loaded = PostgresConversationRepository._load(
+        "old",
+        [{"role": "user", "content": "old", "tool_uses": []}],
+    )
+    assert loaded.owner is None
+    assert [t.content for t in loaded.turns] == ["old"]
+
+
+def test_envelope_loads_owner(fake_pg):
+    from agent_api.adapters.postgres_conversation_repository import (
+        PostgresConversationRepository,
+    )
+
+    loaded = PostgresConversationRepository._load(
+        "s",
+        {"owner": "bob", "turns": [{"role": "user", "content": "hi"}]},
+    )
+    assert loaded.owner == "bob"
