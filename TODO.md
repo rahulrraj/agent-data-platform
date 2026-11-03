@@ -81,11 +81,14 @@ can move.
   to new invocations); blue-green/canary on Lambda map to aliases with
   weighted routing; EKS canary needs an ingress/mesh mechanism (e.g. Argo
   Rollouts/Flagger). Also noted in `deploy/terraform/README.md`.
-- **Push and merge** — remote `feature/initial-platform` is fully pushed
-  (all commits including this TODO update; push via the connector API
-  script `~/workspace/gh_api_push.py` since git HTTPS cannot use the vault
-  credential). The earlier Workflows-permission block is resolved (PAT
-  updated 2026-10-25). Merging the branch is Rahul's later call.
+- **Push and merge** — remote `feature/initial-platform` is at `9a29ad7`
+  (2026-10-25); every commit since then is LOCAL ONLY (auth, dynamic
+  model selection, Bedrock items 1–3, observability, and TODO updates).
+  Push via the connector API script `~/workspace/gh_api_push.py` since
+  git HTTPS cannot use the vault credential. The earlier
+  Workflows-permission block is resolved (PAT updated 2026-10-25; PAT
+  expires Nov 15, 2026 — extend before it lapses or pushing breaks).
+  Merging the branch is Rahul's later call.
 
 ## Capabilities and guardrails
 
