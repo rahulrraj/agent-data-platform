@@ -41,6 +41,7 @@ honest: ✅ enforced in code · 🟡 partial/documented · ❌ planned, not buil
 | Retry with backoff on transient failures | ✅ | `platform/retry.py`; streams retry only before the first chunk |
 | Fail fast on bad input | ✅ | No retries for validation errors |
 | Liveness + readiness probes | ✅ | `/api/health`, `/api/ready` |
+| OTLP tracing, no content | ✅ | ADR 0009: Strands-native + `agent.turn` + capability spans; content capture forced off; no-op without an endpoint; backend choice still open |
 | Stateless gateways | ✅ | History durability comes from the store adapter |
 | Dev-server watchdog | 🟡 | Hook restarts dead dev servers; not a production story |
 | Frozen-rule discipline | ✅ | No tuning on the test set; no mid-test rule changes |
@@ -49,7 +50,7 @@ honest: ✅ enforced in code · 🟡 partial/documented · ❌ planned, not buil
 
 | Guardrail | Status | Notes |
 | --- | --- | --- |
-| Tests per layer (arch doc §9) | ✅ | 429 backend tests green, 4 skipped; 93 UI tests green (2026-11-03; update this row in the same commit as any suite change) |
+| Tests per layer (arch doc §9) | ✅ | 477 backend tests green, 4 skipped; 93 UI tests green (2026-11-03; update this row in the same commit as any suite change) |
 | ADRs for architectural decisions | ✅ | `doc/adr/` |
 | Approvals for gated changes | ✅ | `doc/approvals.md` |
 | No invented scope/content | ✅ | Build what was asked; proposals before commits |

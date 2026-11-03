@@ -183,6 +183,40 @@ field selects one (ADR 0007). The framework does not vary per request.
   adapter (`memory` default, `sqlite` for restart-proof single host,
   Postgres built for multi-instance).
 
+## Observability (OTLP tracing, ADR 0009)
+
+Tracing is OpenTelemetry, Strands-native: framework spans
+(`invoke_agent`, `chat`, `execute_tool`) nest under one `agent.turn`
+span per turn, with `capability.resolve` / `capability.execute` spans
+for the data-capability path and FastAPI/HTTPX auto-instrumentation
+around them. Turn spans carry ids, counts, and lengths only — plus
+the authenticated principal (`enduser.id`) and the resolved model
+key/provider — never prompts, completions, row contents, parameter
+values, or the bearer token. Content capture is forced OFF (Strands
+emits content unredacted by default; setup overrides that
+unconditionally — see the ADR).
+
+Configuration is the standard OTel environment; sampling is the SDK
+default (100%) unless `OTEL_TRACES_SAMPLER` says otherwise:
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Base OTLP/HTTP endpoint (`/v1/traces` appended) | _(unset: tracing is a silent no-op)_ |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Full traces endpoint, used verbatim | _(unset)_ |
+| `OTEL_EXPORTER_OTLP_HEADERS` / `OTEL_EXPORTER_OTLP_TRACES_HEADERS` | Export auth headers | _(unset)_ |
+| `OTEL_SERVICE_NAME` | Service name in spans | `agent-api` |
+| `OTEL_TRACES_SAMPLER` | Sampler, e.g. `parentbased_traceidratio` + `OTEL_TRACES_SAMPLER_ARG` | SDK default (100%) |
+
+When no endpoint is configured, telemetry is a strict no-op: no
+provider, no exporter, no network attempts, and startup never fails
+over it. No backend is chosen in this repo — point the endpoint at
+your collector (Langfuse Cloud and self-hosted Phoenix were the
+review's candidates; the choice is still open). On Lambda the
+exporter is synchronous per span and the handler force-flushes every
+invocation, so spans survive freeze/thaw; elsewhere the standard
+batch processor is used. `/api/health` and `/api/ready` are excluded
+from tracing.
+
 ## Run it
 
 ```bash
