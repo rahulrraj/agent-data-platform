@@ -39,6 +39,10 @@ class Conversation:
 
     id: str
     turns: list[Turn] = field(default_factory=list)
+    # ADR 0008: the principal (`sub`) the session is bound to. None
+    # means unowned — dev mode (auth off), or a session created before
+    # ownership existed; the first authenticated writer claims it.
+    owner: str | None = None
 
     def add_user(self, text: str) -> None:
         self.turns.append(Turn(role=USER, content=text))

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 
 def _parse_int(name: str, raw: str, *, minimum: int | None = None,
@@ -39,6 +40,45 @@ def _parse_float(name: str, raw: str, *, minimum: float | None = None) -> float:
     if minimum is not None and value < minimum:
         raise ValueError(f"{name} must be >= {minimum}, got {value}")
     return value
+
+
+def _parse_auth(raw_issuer: str, raw_audience: str, raw_jwks_url: str,
+                raw_disabled: str) -> tuple[str, str, str, bool]:
+    """Parse the AUTH_* variables (ADR 0008), fail-closed.
+
+    Only the exact value ``"true"`` for AUTH_DISABLED opts out of
+    authentication (local development only). With no issuer configured
+    and no explicit opt-out, startup fails rather than the app
+    silently running open. An issuer must be an https URL, and an
+    audience is required whenever an issuer is set.
+    """
+    issuer = raw_issuer.strip()
+    audience = raw_audience.strip()
+    jwks_url = raw_jwks_url.strip()
+    auth_disabled = raw_disabled == "true"
+    if not issuer and not auth_disabled:
+        raise ValueError(
+            "AUTH_ISSUER is not set and AUTH_DISABLED is not 'true': "
+            "set AUTH_ISSUER (and AUTH_AUDIENCE) to enable authentication, "
+            "or set AUTH_DISABLED=true explicitly for local development"
+        )
+    if issuer:
+        parsed = urlparse(issuer)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError(
+                f"AUTH_ISSUER must be a valid https URL, got {issuer!r}"
+            )
+        if not audience:
+            raise ValueError(
+                "AUTH_AUDIENCE must be set when AUTH_ISSUER is set"
+            )
+    if jwks_url:
+        parsed = urlparse(jwks_url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(
+                f"AUTH_JWKS_URL must be a valid URL, got {jwks_url!r}"
+            )
+    return issuer, audience, jwks_url, auth_disabled
 
 
 def _parse_allowed_models(raw: str) -> dict[str, ModelChoice]:
@@ -129,6 +169,13 @@ class Settings:
     lambda_runtime: bool  # True when AWS_LAMBDA_FUNCTION_NAME is set:
         # the composition root then enforces the Lambda store/cache
         # requirements (m-11) instead of merely documenting them.
+    auth_issuer: str  # OIDC issuer (AUTH_ISSUER); "" when auth is disabled
+    auth_audience: str  # expected `aud` claim (AUTH_AUDIENCE)
+    auth_jwks_url: str  # explicit JWKS URL (AUTH_JWKS_URL); "" derives it
+        # from the issuer via OIDC discovery at the validator, never
+        # per request
+    auth_disabled: bool  # AUTH_DISABLED == "true" only: explicit dev
+        # opt-out; otherwise startup is fail-closed (see _parse_auth)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -155,6 +202,12 @@ class Settings:
             raise ValueError("DATA_CONNECTIONS must be a JSON object")
         allowed_models = _parse_allowed_models(
             os.environ.get("ALLOWED_MODELS", "")
+        )
+        auth_issuer, auth_audience, auth_jwks_url, auth_disabled = _parse_auth(
+            os.environ.get("AUTH_ISSUER", ""),
+            os.environ.get("AUTH_AUDIENCE", ""),
+            os.environ.get("AUTH_JWKS_URL", ""),
+            os.environ.get("AUTH_DISABLED", ""),
         )
         return cls(
             provider=provider,
@@ -201,6 +254,10 @@ class Settings:
                 if origin.strip()
             ),
             lambda_runtime="AWS_LAMBDA_FUNCTION_NAME" in os.environ,
+            auth_issuer=auth_issuer,
+            auth_audience=auth_audience,
+            auth_jwks_url=auth_jwks_url,
+            auth_disabled=auth_disabled,
         )
 
     def describe_model(self) -> str:

@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from typing import AsyncIterator
 
 from agent_api.domain.conversation import Conversation, ToolResult
+from agent_api.platform.request_context import request_context
 from agent_api.ports.capability_repository import (
     CapabilityRepository,
     CapabilityRepositoryError,
@@ -64,6 +65,10 @@ class AskAgentError(Exception):
 
 class InvalidMessageError(AskAgentError):
     """The caller's message failed validation."""
+
+
+class ForbiddenError(AskAgentError):
+    """The session belongs to a different principal (ADR 0008 → 403)."""
 
 
 class AgentServiceError(AskAgentError):
@@ -147,15 +152,38 @@ class AskAgentService:
 
     # -- history helpers ---------------------------------------------------
 
-    def _validated(self, conversation_id: str, message: str) -> Conversation:
+    def _validated(
+        self, conversation_id: str, message: str, principal: str | None = None
+    ) -> Conversation:
         if not message.strip():
             raise InvalidMessageError("message is required")
         try:
             conversation = self._conversations.load(conversation_id)
         except ConversationRepositoryError as exc:
             raise AgentServiceError(str(exc)) from exc
+        self._enforce_owner(conversation, principal)
         conversation.add_user(message)
         return conversation
+
+    @staticmethod
+    def _enforce_owner(
+        conversation: Conversation, principal: str | None
+    ) -> None:
+        """Bind a session to its first authenticated writer (ADR 0008).
+
+        Principal None means no enforcement (auth disabled, dev mode):
+        the owner is left untouched. Otherwise an unowned conversation
+        is claimed by this principal (persisted by the caller's save),
+        and a conversation owned by someone else rejects this caller.
+        The error message names no principal — identity is not leaked
+        into error text.
+        """
+        if principal is None:
+            return
+        if conversation.owner is None:
+            conversation.owner = principal
+        elif conversation.owner != principal:
+            raise ForbiddenError("session belongs to a different user")
 
     def _save(self, conversation: Conversation) -> None:
         try:
@@ -170,32 +198,57 @@ class AskAgentService:
         A copy, so gateway seeding can never mutate the stored history.
         """
         return Conversation(
-            id=conversation.id, turns=list(conversation.turns[-MAX_HISTORY_TURNS:])
+            id=conversation.id,
+            turns=list(conversation.turns[-MAX_HISTORY_TURNS:]),
+            owner=conversation.owner,
         )
 
-    def reset_session(self, conversation_id: str) -> None:
-        """Clear a session's history (fresh start for a bricked session)."""
+    def reset_session(
+        self, conversation_id: str, principal: str | None = None
+    ) -> None:
+        """Clear a session's history (fresh start for a bricked session).
+
+        Enforces ownership like a turn does: a different principal
+        cannot reset someone else's session. A reset by an
+        authenticated principal re-binds the cleared session to that
+        principal; in dev mode (principal None) it stays unowned.
+        """
         with self._session_lock(conversation_id):
-            self._save(Conversation(id=conversation_id))
+            try:
+                conversation = self._conversations.load(conversation_id)
+            except ConversationRepositoryError as exc:
+                raise AgentServiceError(str(exc)) from exc
+            self._enforce_owner(conversation, principal)
+            self._save(Conversation(id=conversation_id, owner=principal))
 
     # -- turns --------------------------------------------------------------
 
     def ask(
-        self, conversation_id: str, message: str, model: str | None = None
+        self,
+        conversation_id: str,
+        message: str,
+        model: str | None = None,
+        principal: str | None = None,
+        user_token: str | None = None,
     ) -> AgentReply:
         """One full agentic turn; returns the reply and the tools it used.
 
         `model` is an allowlist key (ADR 0007); None means the
-        configured model.
+        configured model. `principal`/`user_token` are the authenticated
+        caller (ADR 0008); principal None means auth is off and no
+        ownership is enforced. The token is never logged — it travels
+        only inside the per-turn request context around the gateway
+        call, where tools that forward it downstream can read it.
         """
         with self._session_lock(conversation_id):
-            conversation = self._validated(conversation_id, message)
+            conversation = self._validated(conversation_id, message, principal)
             # Persist the user turn before the gateway runs (see module
             # docstring): a gateway failure must not diverge backends.
             self._save(conversation)
             try:
                 gateway = self._resolve_gateway(model)
-                turn = gateway.generate(self._gateway_conversation(conversation))
+                with request_context(principal, user_token):
+                    turn = gateway.generate(self._gateway_conversation(conversation))
             except ModelGatewayError as exc:
                 raise AgentServiceError(str(exc)) from exc
             conversation.add_assistant(
@@ -205,12 +258,21 @@ class AskAgentService:
             return AgentReply(text=turn.content, tool_uses=turn.tool_uses)
 
     async def ask_stream(
-        self, conversation_id: str, message: str, model: str | None = None
+        self,
+        conversation_id: str,
+        message: str,
+        model: str | None = None,
+        principal: str | None = None,
+        user_token: str | None = None,
     ) -> AsyncIterator[StreamChunk]:
         """Same as ask(), but yields text/tool chunks as they arrive.
 
         `model` is an allowlist key (ADR 0007); None means the
-        configured model.
+        configured model. `principal`/`user_token` are the authenticated
+        caller (ADR 0008); see ask() for the ownership and token rules.
+        The request context wraps the whole stream loop, so the token
+        stays available to tools for the full turn and is reset when
+        the stream ends or is aborted.
         """
         lock = self._session_lock(conversation_id)
         conversation: Conversation | None = None
@@ -225,35 +287,36 @@ class AskAgentService:
             while not lock.acquire(blocking=False):
                 await asyncio.sleep(0.05)
             try:
-                conversation = self._validated(conversation_id, message)
+                conversation = self._validated(conversation_id, message, principal)
                 self._save(conversation)  # user turn, before the gateway
                 try:
                     gateway = self._resolve_gateway(model)
-                    async for chunk in gateway.stream(
-                        self._gateway_conversation(conversation)
-                    ):
-                        if chunk.kind == "text":
-                            texts.append(chunk.payload)
-                        elif chunk.kind == "tool":
-                            # Nit: tool chunks used to be yielded on
-                            # every occurrence while saved history
-                            # deduped by name — raw SSE consumers saw
-                            # repeats the UI hid. Yield each tool name
-                            # once, matching the saved-history dedup.
-                            if chunk.payload in tools:
-                                continue
-                            tools.append(chunk.payload)
-                        elif chunk.kind == "tool_result":
-                            try:
-                                data = json.loads(chunk.payload)
-                                tool_results.append(
-                                    ToolResult(
-                                        tool=data["tool"], result=data["result"]
+                    with request_context(principal, user_token):
+                        async for chunk in gateway.stream(
+                            self._gateway_conversation(conversation)
+                        ):
+                            if chunk.kind == "text":
+                                texts.append(chunk.payload)
+                            elif chunk.kind == "tool":
+                                # Nit: tool chunks used to be yielded on
+                                # every occurrence while saved history
+                                # deduped by name — raw SSE consumers saw
+                                # repeats the UI hid. Yield each tool name
+                                # once, matching the saved-history dedup.
+                                if chunk.payload in tools:
+                                    continue
+                                tools.append(chunk.payload)
+                            elif chunk.kind == "tool_result":
+                                try:
+                                    data = json.loads(chunk.payload)
+                                    tool_results.append(
+                                        ToolResult(
+                                            tool=data["tool"], result=data["result"]
+                                        )
                                     )
-                                )
-                            except (ValueError, KeyError, TypeError):
-                                pass
-                        yield chunk
+                                except (ValueError, KeyError, TypeError):
+                                    pass
+                            yield chunk
                 except ModelGatewayError as exc:
                     # Persist the partial answer with its marker, then
                     # report the failure (partial save is best-effort:

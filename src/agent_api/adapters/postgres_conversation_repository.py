@@ -58,18 +58,27 @@ class PostgresConversationRepository:
 
     @staticmethod
     def _dump(conversation: Conversation) -> str:
+        # Envelope form (ADR 0008), same as the SQLite adapter: the
+        # owner travels with the turns in the same turns_json JSONB
+        # column — no schema change. Rows written before ownership
+        # existed hold a bare turns list; _load reads those as
+        # owner None.
         return json.dumps(
-            [
-                {
-                    "role": t.role,
-                    "content": t.content,
-                    "tool_uses": list(t.tool_uses),
-                    "tool_results": [
-                        {"tool": r.tool, "result": r.result} for r in t.tool_results
-                    ],
-                }
-                for t in conversation.turns
-            ]
+            {
+                "owner": conversation.owner,
+                "turns": [
+                    {
+                        "role": t.role,
+                        "content": t.content,
+                        "tool_uses": list(t.tool_uses),
+                        "tool_results": [
+                            {"tool": r.tool, "result": r.result}
+                            for r in t.tool_results
+                        ],
+                    }
+                    for t in conversation.turns
+                ],
+            }
         )
 
     @staticmethod
@@ -82,7 +91,18 @@ class PostgresConversationRepository:
         if turns is None:
             return Conversation(id=conversation_id, turns=[])
         try:
-            items = turns if isinstance(turns, list) else json.loads(turns or "[]")
+            document = turns if isinstance(turns, (list, dict)) else json.loads(turns or "[]")
+            # Legacy rows (pre-ownership) hold a bare turns list: they
+            # deserialize with owner None and are claimable once by the
+            # first authenticated writer, then bound.
+            if isinstance(document, list):
+                items, owner = document, None
+            elif isinstance(document, dict):
+                items, owner = document.get("turns"), document.get("owner")
+                if owner is not None and not isinstance(owner, str):
+                    raise ValueError("owner is not a string")
+            else:
+                raise ValueError("turns_json is neither a list nor an envelope")
             if not isinstance(items, list):
                 raise ValueError("turns_json is not a list")
             parsed = [
@@ -104,7 +124,7 @@ class PostgresConversationRepository:
                 conversation_id, exc,
             )
             return Conversation(id=conversation_id, turns=[])
-        return Conversation(id=conversation_id, turns=parsed)
+        return Conversation(id=conversation_id, turns=parsed, owner=owner)
 
     def load(self, conversation_id: str) -> Conversation:
         try:

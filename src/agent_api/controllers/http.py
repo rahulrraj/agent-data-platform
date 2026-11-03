@@ -6,26 +6,44 @@ providers — it only sees the AskAgentService.
 
 Session ids: API clients must pass an explicit `session_id` on every
 call — there is no "default" fallback session shared by anonymous
-callers. (Binding a session id to an authenticated principal is still
-open: it needs the auth-design decision, and no auth system is invented
-here. Until then, anyone who can reach the API can read or append any
-session id they know; the shared-default hole is closed, the isolation
-gap is not.)
+callers.
+
+Authentication (ADR 0008): when a token validator is wired (the
+composition root wires one whenever AUTH_ISSUER is configured), every
+data endpoint requires `Authorization: Bearer <token>`, validated
+before any service work — including `/api/chat`, where validation
+happens before the streaming response is returned, so an
+unauthenticated stream never starts. The session-isolation gap is
+closed when auth is on: the controller extracts the principal and
+passes it (with the raw token, for downstream forwarding) to the
+service, which binds each session to its first writer and rejects a
+different principal with 403. `/api/health` and `/api/ready` stay
+public (ops endpoints, no data). When no validator is wired
+(AUTH_DISABLED=true, local development only), auth is off entirely
+and anyone who can reach the API can read or append any session id
+they know — the pre-auth behavior, kept only behind the explicit
+dev opt-out.
 """
 
 from __future__ import annotations
 
 import json
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from agent_api.ports.token_validator import (
+    TokenValidationError,
+    TokenValidator,
+    TokenValidatorUnavailableError,
+)
 from agent_api.services.ask_agent import (
     AgentServiceError,
     AskAgentError,
     AskAgentService,
+    ForbiddenError,
     InvalidMessageError,
 )
 
@@ -49,10 +67,45 @@ class ChatResponse(BaseModel):
     session_id: str
 
 
-def _to_http_error(exc: AskAgentError) -> HTTPException:
+def _error_status(exc: AskAgentError) -> int:
     if isinstance(exc, InvalidMessageError):
-        return HTTPException(status_code=400, detail=str(exc))
-    return HTTPException(status_code=502, detail=str(exc))
+        return 400
+    if isinstance(exc, ForbiddenError):
+        return 403
+    return 502
+
+
+def _to_http_error(exc: AskAgentError) -> HTTPException:
+    return HTTPException(status_code=_error_status(exc), detail=str(exc))
+
+
+def _authenticate(
+    request: Request, validator: TokenValidator | None
+) -> tuple[str | None, str | None]:
+    """Extract and validate the bearer token; (principal, raw token).
+
+    No validator means auth is off (dev opt-out): returns (None, None)
+    and the service enforces nothing. Error details are generic on
+    purpose — they never include token material or validator internals.
+    """
+    if validator is None:
+        return None, None
+    header = request.headers.get("authorization", "")
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(status_code=401, detail="authentication required")
+    token = token.strip()
+    try:
+        principal = validator.validate(token)
+    except TokenValidatorUnavailableError:
+        raise HTTPException(
+            status_code=503, detail="authentication service unavailable"
+        ) from None
+    except TokenValidationError:
+        raise HTTPException(
+            status_code=401, detail="invalid or expired token"
+        ) from None
+    return principal, token
 
 
 def create_app(
@@ -60,6 +113,7 @@ def create_app(
     model_label: str,
     cors_origins: tuple[str, ...] | list[str] = (),
     model_keys: tuple[str, ...] = ("default",),
+    token_validator: TokenValidator | None = None,
 ) -> FastAPI:
     """Builds the FastAPI app with the use case injected.
 
@@ -68,6 +122,8 @@ def create_app(
     opt-in per deployment, never "*" by default. `model_keys` lists the
     caller-facing model keys from the composition root's allowlist
     (ADR 0007); the health payload reports them additively.
+    `token_validator`, when wired, gates every data endpoint on a
+    valid bearer token (ADR 0008); None leaves auth off (dev only).
     """
     app = FastAPI(title="Agent API")
 
@@ -98,13 +154,20 @@ def create_app(
         )
 
     @app.post("/api/ask", response_model=ChatResponse)
-    def ask(req: ChatRequest):
+    def ask(req: ChatRequest, request: Request):
         # Sync def, deliberately: FastAPI runs sync endpoints in its
         # threadpool, so a minutes-long model turn cannot block the
         # event loop (the old `async def` awaited nothing and stalled
         # /api/health, /api/ready and /api/chat for the whole turn).
+        principal, user_token = _authenticate(request, token_validator)
         try:
-            reply = service.ask(req.session_id, req.message, model=req.model)
+            reply = service.ask(
+                req.session_id,
+                req.message,
+                model=req.model,
+                principal=principal,
+                user_token=user_token,
+            )
         except AskAgentError as exc:
             raise _to_http_error(exc) from exc
         return ChatResponse(
@@ -112,15 +175,25 @@ def create_app(
         )
 
     @app.post("/api/chat")
-    async def chat(req: ChatRequest):
+    async def chat(req: ChatRequest, request: Request):
+        # Authenticate BEFORE the StreamingResponse is returned: an
+        # unauthenticated caller gets a plain 401, never a started
+        # stream. Token expiry mid-stream is validated at turn start
+        # only (ADR 0008); the turn ends and the UI re-authenticates.
+        principal, user_token = _authenticate(request, token_validator)
+
         async def event_stream():
             try:
                 async for chunk in service.ask_stream(
-                    req.session_id, req.message, model=req.model
+                    req.session_id,
+                    req.message,
+                    model=req.model,
+                    principal=principal,
+                    user_token=user_token,
                 ):
                     yield f"data: {json.dumps({'type': chunk.kind, 'payload': chunk.payload})}\n\n"
             except AskAgentError as exc:
-                status = 400 if isinstance(exc, InvalidMessageError) else 502
+                status = _error_status(exc)
                 yield f"data: {json.dumps({'type': 'error', 'status': status, 'error': str(exc)})}\n\n"
             yield "data: [DONE]\n\n"
 
@@ -131,10 +204,11 @@ def create_app(
         )
 
     @app.delete("/api/sessions/{session_id}")
-    def reset_session(session_id: str):
+    def reset_session(session_id: str, request: Request):
         """Clear a session's history (fresh start for a bricked session)."""
+        principal, _ = _authenticate(request, token_validator)
         try:
-            service.reset_session(session_id)
+            service.reset_session(session_id, principal=principal)
         except AskAgentError as exc:
             raise _to_http_error(exc) from exc
         return {"status": "reset", "session_id": session_id}

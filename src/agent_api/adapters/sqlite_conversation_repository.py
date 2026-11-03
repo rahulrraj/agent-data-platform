@@ -56,18 +56,26 @@ class SqliteConversationRepository:
 
     @staticmethod
     def _dump(conversation: Conversation) -> str:
+        # Envelope form (ADR 0008): the owner travels with the turns in
+        # the same turns_json column — no schema change. Rows written
+        # before ownership existed hold a bare turns list; _load reads
+        # those as owner None (see below).
         return json.dumps(
-            [
-                {
-                    "role": t.role,
-                    "content": t.content,
-                    "tool_uses": list(t.tool_uses),
-                    "tool_results": [
-                        {"tool": r.tool, "result": r.result} for r in t.tool_results
-                    ],
-                }
-                for t in conversation.turns
-            ]
+            {
+                "owner": conversation.owner,
+                "turns": [
+                    {
+                        "role": t.role,
+                        "content": t.content,
+                        "tool_uses": list(t.tool_uses),
+                        "tool_results": [
+                            {"tool": r.tool, "result": r.result}
+                            for r in t.tool_results
+                        ],
+                    }
+                    for t in conversation.turns
+                ],
+            }
         )
 
     @staticmethod
@@ -81,7 +89,18 @@ class SqliteConversationRepository:
         if not turns_json:
             return Conversation(id=conversation_id, turns=[])
         try:
-            items = json.loads(turns_json)
+            document = json.loads(turns_json)
+            # Legacy rows (pre-ownership) hold a bare turns list: they
+            # deserialize with owner None and are claimable once by the
+            # first authenticated writer, then bound.
+            if isinstance(document, list):
+                items, owner = document, None
+            elif isinstance(document, dict):
+                items, owner = document.get("turns"), document.get("owner")
+                if owner is not None and not isinstance(owner, str):
+                    raise ValueError("owner is not a string")
+            else:
+                raise ValueError("turns_json is neither a list nor an envelope")
             if not isinstance(items, list):
                 raise ValueError("turns_json is not a list")
             turns = []
@@ -104,7 +123,7 @@ class SqliteConversationRepository:
                 conversation_id, exc,
             )
             return Conversation(id=conversation_id, turns=[])
-        return Conversation(id=conversation_id, turns=turns)
+        return Conversation(id=conversation_id, turns=turns, owner=owner)
 
     def load(self, conversation_id: str) -> Conversation:
         try:

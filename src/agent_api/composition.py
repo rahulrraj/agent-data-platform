@@ -28,6 +28,7 @@ from agent_api.adapters.bedrock_embedding_gateway import BedrockEmbeddingGateway
 from agent_api.adapters.gemini_embedding_gateway import GeminiEmbeddingGateway
 from agent_api.adapters.http_capability_executor import HttpCapabilityExecutor
 from agent_api.adapters.in_memory_conversation_repository import InMemoryConversationRepository
+from agent_api.adapters.oidc_token_validator import OidcTokenValidator
 from agent_api.adapters.ollama_embedding_gateway import OllamaEmbeddingGateway
 from agent_api.adapters.postgres_conversation_repository import (
     PostgresConversationRepository,
@@ -43,6 +44,7 @@ from agent_api.domain.prompts import build_system_prompt
 from agent_api.platform.retry import RetryPolicy
 from agent_api.ports.conversation_repository import ConversationRepository
 from agent_api.ports.model_gateway import ModelGateway, ModelGatewayError
+from agent_api.ports.token_validator import TokenValidator
 from agent_api.services.ask_agent import AskAgentService
 from agent_api.tools import ToolDeps, load_tools, tool_names
 
@@ -292,6 +294,24 @@ def build_repository(settings: Settings) -> ConversationRepository:
     return InMemoryConversationRepository()
 
 
+def _build_token_validator(settings: Settings) -> TokenValidator | None:
+    """The OIDC token validator, or None when auth is disabled (ADR 0008).
+
+    Auth disabled is the explicit dev opt-out only (AUTH_DISABLED=true);
+    Settings.from_env() is fail-closed, so a non-disabled settings
+    object always carries an issuer and audience here. The validator
+    is constructed lazily — no JWKS fetch happens at startup; the
+    first validated request fetches (and caches) the keys.
+    """
+    if settings.auth_disabled:
+        return None
+    return OidcTokenValidator(
+        issuer=settings.auth_issuer,
+        audience=settings.auth_audience,
+        jwks_url=settings.auth_jwks_url or None,
+    )
+
+
 def build_tool_deps(settings: Settings, retry_policy: RetryPolicy) -> ToolDeps:
     """Wire the data-capability stack: registry + embeddings + executors."""
     registry = YamlCapabilityRepository(settings.capabilities_path)
@@ -350,4 +370,5 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         service, model_label=model_label(settings),
         cors_origins=settings.cors_origins,
         model_keys=factory.available_keys,
+        token_validator=_build_token_validator(settings),
     )
