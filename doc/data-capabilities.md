@@ -109,6 +109,26 @@ startup, naming the capability): `max_results` outside 1..500 or not an
 integer, `keep` other than `first`/`last`, or `list_paths` not a list of
 non-empty strings.
 
+### Forwarding the user's token (HTTP only)
+
+One optional top-level registry key, `forward_user_token: true`, makes
+an HTTP capability send the calling user's bearer token to the
+downstream API as its `Authorization` header, instead of a static
+service credential (ADR 0008). The token comes from the per-turn
+request context — never from tool arguments or conversation history,
+so the model never sees it — and is sent only when a token is present
+for the turn. A non-boolean value is rejected when the registry loads,
+naming the capability. The key is validated-but-ignored for SQL
+kinds, which keep service credentials only.
+
+A capability with `forward_user_token: true` must not use a connection
+that defines a static `api_key`: two identities for one call is a
+startup config error (checked when the app is composed, naming the
+capability and the connection), and the executor refuses the call
+rather than sending either identity if both are somehow present. A
+downstream 401/403 surfaces as a capability error with no token
+details and no upstream body.
+
 ## Connections
 
 `DATA_CONNECTIONS` is a JSON object in the environment mapping connection
