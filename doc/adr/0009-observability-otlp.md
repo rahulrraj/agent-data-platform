@@ -193,5 +193,5 @@ no backend, no credentials, no real-backend calls in this change.
   freeze/thaw cycle.
 - Re-check the Strands content default on every Strands upgrade
   (the empirical tests pin 1.57.1's behavior).
-- LangGraph-native span detail and OTel metrics remain follow-ups
-  (see TODO.md).
+- LangGraph-native span detail: done 2026-11-04, see ADR 0010.
+  OTel metrics remain a follow-up (see TODO.md).

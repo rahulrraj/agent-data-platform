@@ -58,6 +58,7 @@ carries its own `Contents` section at the top.
 | [`adr/0007-dynamic-model-selection.md`](adr/0007-dynamic-model-selection.md) | Per-request model selection via a server-side `ALLOWED_MODELS` allowlist |
 | [`adr/0008-authentication.md`](adr/0008-authentication.md) | OIDC login (Okta first, extendable), bearer tokens, per-capability token forwarding |
 | [`adr/0009-observability-otlp.md`](adr/0009-observability-otlp.md) | OTLP tracing: Strands-native + service spans, content redaction forced on |
+| [`adr/0010-langgraph-otel-detail.md`](adr/0010-langgraph-otel-detail.md) | LangGraph detail via OpenInference, every content family hidden by an explicit TraceConfig |
 
 ## Frontend and infrastructure
 

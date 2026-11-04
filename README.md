@@ -208,7 +208,10 @@ Tracing is OpenTelemetry, Strands-native: framework spans
 (`invoke_agent`, `chat`, `execute_tool`) nest under one `agent.turn`
 span per turn, with `capability.resolve` / `capability.execute` spans
 for the data-capability path and FastAPI/HTTPX auto-instrumentation
-around them. Turn spans carry ids, counts, and lengths only — plus
+around them. LangGraph turns get the same per-step detail through the
+OpenInference LangChain instrumentor (ADR 0010): a `LangGraph` root
+span with chain, LLM, and tool spans beneath it, every content family
+hidden by an explicit TraceConfig. Turn spans carry ids, counts, and lengths only — plus
 the authenticated principal (`enduser.id`) and the resolved model
 key/provider — never prompts, completions, row contents, parameter
 values, or the bearer token. Content capture is forced OFF (Strands
@@ -442,7 +445,7 @@ own `Contents` section at the top.
 | `doc/guardrails.md` | Guardrail catalog — enforced vs. planned, honestly marked |
 | `doc/approvals.md` | Approval matrix, what counts as approval, emergency path |
 | `doc/developer-guide.md` | Working notes: layout, conventions, operations, sandbox quirks |
-| `doc/adr/` | Decision records: 0001 tools folder · 0002 capability registry · 0003 dual frameworks · 0004 no composites · 0005 proxy strip · 0006 shared executor base · 0007 dynamic model selection · 0008 authentication · 0009 OTLP observability |
+| `doc/adr/` | Decision records: 0001 tools folder · 0002 capability registry · 0003 dual frameworks · 0004 no composites · 0005 proxy strip · 0006 shared executor base · 0007 dynamic model selection · 0008 authentication · 0009 OTLP observability · 0010 LangGraph OTel detail |
 
 ## Principles in one line each
 

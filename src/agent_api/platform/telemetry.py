@@ -43,6 +43,17 @@ Design rules, all enforced here rather than left to operator care:
   business identifiers in query strings would otherwise leak), and
   the FastAPI instrumentation captures no request/response headers,
   so the bearer token can never land in a span that way either.
+* LangGraph detail is OpenInference, content-hidden. The LangGraph
+  adapter's turns are LangChain runnables, so the OpenInference
+  LangChain instrumentor (ADR 0010) emits the per-step spans
+  (agent / chain / LLM / tool) through the same provider. Its
+  TraceConfig hides every content family explicitly — inputs,
+  outputs, messages, prompts, retrieval documents, invocation
+  parameters, tool definitions — so no prompt, completion, tool
+  argument, or tool result can reach a span. The flags are set
+  explicitly in code, never left to the instrumentor's env-var
+  defaults, and instrumentation happens only when a provider was
+  built, so the no-endpoint state stays fully untouched.
 """
 
 from __future__ import annotations
@@ -222,6 +233,87 @@ def _instrument_fastapi(app) -> None:
     )
 
 
+#: The one LangChain instrumentor for the process. OpenInference
+#: instrumentation is process-global (it patches LangChain's
+#: callback-manager construction) and binds to a single tracer
+#: provider: a second instrument() call on a fresh instance is
+#: silently ignored and keeps the old provider (verified
+#: empirically, ADR 0010). Exactly one instance is therefore kept
+#: and re-bound by uninstrumenting first — see
+#: :func:`instrument_langchain`.
+_langchain_instrumentor = None
+_langchain_instrumented = False
+
+
+def _redacting_trace_config():
+    """OpenInference TraceConfig with every content family hidden.
+
+    Every flag is set explicitly to True: left unset, the
+    instrumentor would read OPENINFERENCE_HIDE_* env vars and
+    default to maximum observability, which would re-enable
+    content capture. Content hiding is a platform rule (ADR 0009
+    decision 5), not an operator preference.
+    """
+    from openinference.instrumentation import TraceConfig
+
+    return TraceConfig(
+        hide_inputs=True,
+        hide_outputs=True,
+        hide_input_messages=True,
+        hide_output_messages=True,
+        hide_input_text=True,
+        hide_output_text=True,
+        hide_prompts=True,
+        hide_retrieval_documents=True,
+        hide_llm_invocation_parameters=True,
+        hide_llm_tools=True,
+    )
+
+
+def instrument_langchain(tracer_provider) -> None:
+    """Instrument LangChain runnables with content hidden (ADR 0010).
+
+    Binds the process-global OpenInference instrumentor to
+    `tracer_provider`, uninstrumenting first so a repeat call rebinds
+    instead of silently keeping the old provider. Failures are
+    logged and swallowed: telemetry detail must never fail startup.
+    """
+    global _langchain_instrumentor, _langchain_instrumented
+    try:
+        from openinference.instrumentation.langchain import (
+            LangChainInstrumentor,
+        )
+
+        if _langchain_instrumentor is None:
+            _langchain_instrumentor = LangChainInstrumentor()
+        elif _langchain_instrumented:
+            _langchain_instrumentor.uninstrument()
+            _langchain_instrumented = False
+        _langchain_instrumentor.instrument(
+            tracer_provider=tracer_provider,
+            config=_redacting_trace_config(),
+        )
+        _langchain_instrumented = True
+    except Exception:  # noqa: BLE001 — telemetry must never fail startup
+        logger.exception("LangChain instrumentation failed; continuing without it")
+
+
+def uninstrument_langchain() -> None:
+    """Remove the LangChain instrumentation (test teardown).
+
+    No-op when nothing was instrumented. Called by the
+    `otel_global_state` test fixture so a provider bound in one test
+    cannot leak spans into later tests.
+    """
+    global _langchain_instrumented
+    if _langchain_instrumented and _langchain_instrumentor is not None:
+        try:
+            _langchain_instrumentor.uninstrument()
+        except Exception:  # noqa: BLE001 — teardown hygiene only
+            pass
+        _langchain_instrumented = False
+
+
 def setup_telemetry(*, lambda_runtime: bool, app=None):
     """Configure process-global telemetry; returns the provider or None.
 
@@ -241,6 +333,7 @@ def setup_telemetry(*, lambda_runtime: bool, app=None):
     trace.set_tracer_provider(provider)
     _set_propagators()
     _instrument_httpx()
+    instrument_langchain(provider)
     if app is not None:
         _instrument_fastapi(app)
     return provider

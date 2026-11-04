@@ -250,3 +250,40 @@ def test_scrub_url_accepts_bytes_url():
         span, _RequestInfo(b"https://api.example.com/v1/x?token=abc")
     )
     assert span.attributes["http.url"] == "https://api.example.com/v1/x"
+
+
+# --- LangChain instrumentation wiring (ADR 0010) --------------------------
+
+
+def test_setup_instruments_langchain_when_configured(monkeypatch, otel_global_state):
+    """setup_telemetry binds the LangChain instrumentor to its provider."""
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+    calls = []
+    monkeypatch.setattr(
+        telemetry, "instrument_langchain", lambda provider: calls.append(provider)
+    )
+    provider = telemetry.setup_telemetry(lambda_runtime=False)
+    assert provider is not None
+    assert calls == [provider]
+
+
+def test_setup_without_endpoint_does_not_instrument_langchain(
+    monkeypatch, otel_global_state
+):
+    """No endpoint means no provider and no LangChain instrumentation."""
+    calls = []
+    monkeypatch.setattr(
+        telemetry, "instrument_langchain", lambda provider: calls.append(provider)
+    )
+    assert telemetry.setup_telemetry(lambda_runtime=False) is None
+    assert calls == []
+
+
+def test_instrument_langchain_failure_is_swallowed(monkeypatch):
+    """A broken instrumentor must never fail startup (ADR 0009 spirit)."""
+
+    def _boom():
+        raise RuntimeError("no instrumentor here")
+
+    monkeypatch.setattr(telemetry, "_redacting_trace_config", _boom)
+    telemetry.instrument_langchain(TracerProvider())  # must not raise

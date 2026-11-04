@@ -62,3 +62,12 @@ def otel_global_state():
         HTTPXClientInstrumentor().uninstrument()
     except Exception:  # noqa: BLE001, S110 — teardown hygiene only
         pass
+    # LangChain instrumentation binds one provider process-globally;
+    # without this, spans from later tests would land in the dead
+    # provider above. The next setup call re-instruments fresh.
+    try:
+        from agent_api.platform.telemetry import uninstrument_langchain
+
+        uninstrument_langchain()
+    except Exception:  # noqa: BLE001, S110 — teardown hygiene only
+        pass

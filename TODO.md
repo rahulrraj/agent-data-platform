@@ -11,7 +11,7 @@ can move.
 - [Live tests and verification](#live-tests-and-verification)
 - [Deployment and infrastructure](#deployment-and-infrastructure)
 - [Capabilities and guardrails](#capabilities-and-guardrails)
-- [Observability](#observability-implemented-2026-11-03-adr-0009)
+- [Observability](#observability-implemented-2026-11-03-adr-0009-langgraph-detail-2026-11-04-adr-0010)
 - [Agent interoperability](#agent-interoperability)
 - [Platform hardening](#platform-hardening)
 
@@ -126,29 +126,32 @@ can move.
   for future guardrail reviews: the 500 ceiling is a per-capability
   opt-in, not a new default, and registry values are rejected at load.
 
-## Observability (implemented 2026-11-03, ADR 0009)
+## Observability (implemented 2026-11-03, ADR 0009; LangGraph detail 2026-11-04, ADR 0010)
 
-- **OTLP tracing implemented** — Strands-native telemetry via the global
-  OTel provider + framework-agnostic `agent.turn` spans + `capability.resolve`
+- **OTLP tracing implemented** — Strands-native + OpenInference
+  LangGraph telemetry via the global OTel provider +
+  framework-agnostic `agent.turn` spans + `capability.resolve`
   / `capability.execute` spans + FastAPI/HTTPX instrumentation; content
   capture forced off (Strands' default emits content unredacted — verified
-  empirically, see ADR 0009); endpoint from `OTEL_EXPORTER_OTLP_*` env,
+  empirically, see ADR 0009; the LangGraph instrumentor hides every
+  content family via an explicit TraceConfig — verified empirically,
+  see ADR 0010); endpoint from `OTEL_EXPORTER_OTLP_*` env,
   silent no-op when unconfigured; 100% sampling default; Lambda uses a
-  synchronous span processor + per-invocation force-flush. 48 tests
-  (in-memory exporter + stub-model Strands checks + stub-receiver smoke
-  test). Remaining follow-ups:
+  synchronous span processor + per-invocation force-flush. 57 tests
+  (in-memory exporter + stub-model Strands and LangGraph checks +
+  stub-receiver smoke test). Remaining follow-ups:
   - **Pick a backend** (Langfuse Cloud vs self-hosted Phoenix were the
     review's candidates) and wire `OTEL_EXPORTER_OTLP_ENDPOINT` +
     headers in the deployment; then verify live (spans arriving,
     redaction holding, Lambda flush under freeze/thaw). Nothing in the
     repo chooses or configures a backend yet.
-  - **LangGraph-native OTel detail** (via langsmith[otel]/OpenInference) —
-    service spans cover LangGraph turns at turn granularity; framework
-    detail is a follow-up.
   - **OTel metrics / derived cost** — tokens are recorded on spans;
     pricing is never invented; metrics export is not built.
   - Re-check the Strands content default on every Strands upgrade
     (`tests/test_telemetry_strands.py` pins 1.57.1's behavior).
+  - Re-check the OpenInference content hiding on every OpenInference
+    upgrade (`tests/test_telemetry_langgraph.py` pins the 0.1.81 /
+    0.1.75 behavior).
 - **Structured audit log** (separate item, still open) — see Capabilities
   and guardrails below.
 

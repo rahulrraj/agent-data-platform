@@ -21,6 +21,12 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.45,<1.46",
     "opentelemetry-instrumentation-fastapi>=0.66b0,<0.67",
     "opentelemetry-instrumentation-httpx>=0.66b0,<0.67",
+    # LangGraph-native detail (ADR 0010): OpenInference instruments
+    # LangChain runnables through the global provider; versions track
+    # the empirically verified 0.1.81 / 0.1.75 pair (content hiding
+    # verified against a stub-model turn, see tests/test_telemetry_langgraph.py).
+    "openinference-instrumentation-langchain>=0.1.81,<0.2",
+    "openinference-instrumentation>=0.1.75,<0.2",
     "langchain>=1.0",
     "langgraph>=1.0",
     "langchain-core>=1.0",
