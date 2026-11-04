@@ -121,6 +121,11 @@ no backend, no credentials, no real-backend calls in this change.
    and left unconfigured. **Backend undecided** (Langfuse Cloud vs
    self-hosted Phoenix were the review's candidates) — no backend
    is picked, no credentials exist, no real backend was called.
+   Backend-agnostic by direction (Rahul 2026-11-04): no backend is
+   ever chosen in code — any OTLP/HTTP backend works via the env
+   vars above, and selection is deployment config. (CloudWatch's
+   OTLP endpoints additionally need SigV4 signing, a
+   deployment-layer adapter, not a code change.)
 7. **Sampling: SDK default (100%), via `OTEL_TRACES_SAMPLER`.** No
    sampler is set in code; no tail sampling in this change.
 8. **Lambda flush rule.** On Lambda (`AWS_LAMBDA_FUNCTION_NAME` set,
@@ -185,12 +190,12 @@ no backend, no credentials, no real-backend calls in this change.
 
 ## Open items (need a real backend / Rahul)
 
-- Pick the backend (Langfuse Cloud vs self-hosted Phoenix) and wire
-  `OTEL_EXPORTER_OTLP_ENDPOINT` + `OTEL_EXPORTER_OTLP_HEADERS`
-  (auth) in the deployment — nothing in this change chooses or
-  configures one. Then verify live: spans arriving, content
-  redaction holding end to end, and the Lambda flush under a real
-  freeze/thaw cycle.
+- Wire whichever OTLP backend the deployment uses
+  (`OTEL_EXPORTER_OTLP_ENDPOINT` + `OTEL_EXPORTER_OTLP_HEADERS`
+  for auth) — no backend is chosen in code (backend-agnostic
+  direction, 2026-11-04). Then verify live: spans arriving,
+  content redaction holding end to end, and the Lambda flush
+  under a real freeze/thaw cycle.
 - Re-check the Strands content default on every Strands upgrade
   (the empirical tests pin 1.57.1's behavior).
 - LangGraph-native span detail: done 2026-11-04, see ADR 0010.

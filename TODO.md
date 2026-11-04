@@ -140,11 +140,15 @@ can move.
   synchronous span processor + per-invocation force-flush. 57 tests
   (in-memory exporter + stub-model Strands and LangGraph checks +
   stub-receiver smoke test). Remaining follow-ups:
-  - **Pick a backend** (Langfuse Cloud vs self-hosted Phoenix were the
-    review's candidates) and wire `OTEL_EXPORTER_OTLP_ENDPOINT` +
-    headers in the deployment; then verify live (spans arriving,
-    redaction holding, Lambda flush under freeze/thaw). Nothing in the
-    repo chooses or configures a backend yet.
+  - **Backend stays open by design** (Rahul 2026-11-04): no backend is
+    chosen — any OTLP/HTTP backend works via `OTEL_EXPORTER_OTLP_ENDPOINT`
+    + headers, with no backend-specific code in the repo (verified by
+    audit 2026-11-04). Wiring a backend is deployment config, and live
+    verification (spans arriving, redaction holding, Lambda flush under
+    freeze/thaw) happens against whichever backend is deployed.
+    CloudWatch's OTLP endpoints need SigV4 signing, which the plain
+    exporter cannot do — that is a deployment-layer adapter (ADOT),
+    not a code change.
   - **OTel metrics / derived cost** — tokens are recorded on spans;
     pricing is never invented; metrics export is not built.
   - Re-check the Strands content default on every Strands upgrade

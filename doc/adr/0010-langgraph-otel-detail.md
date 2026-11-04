@@ -118,6 +118,7 @@ by `tests/test_telemetry_langgraph.py`):
 
 - Re-check the content-hiding behavior on every OpenInference
   upgrade (the sentinel test pins the 0.1.81 / 0.1.75 behavior).
-- Live collector verification (with the backend choice, still
-  open) should confirm the LangGraph spans arrive redacted end to
-  end.
+- Live verification against whichever OTLP backend the deployment
+  uses (no backend is chosen in code, per the backend-agnostic
+  direction) should confirm the LangGraph spans arrive redacted
+  end to end.
