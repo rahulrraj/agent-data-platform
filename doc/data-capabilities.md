@@ -184,7 +184,8 @@ Snowflake accepts `private_key` (preferred) or `password`. SQL Server accepts
 Hand-writing entries is fine for a few; for a whole API, generate a draft:
 
     python -m agent_api.capability_import --from swagger \
-        --spec openapi.json --connection orders_api --out draft.yaml
+        --spec openapi.json --connection orders_api --out draft.yaml \
+        --questions questions.yaml
 
 OpenAPI 3.x and Swagger 2.0; GET operations only (the platform is
 read-only — anything else is listed as skipped, not guessed); query + path
@@ -195,6 +196,14 @@ registry by hand. The registry stays reviewed code — the generator never
 edits it. Snowflake-table import will plug into the same module later
 (`--from snowflake`).
 
+A malformed spec never crashes the generator: a broken operation is
+dropped with a report error and the run exits 2 writing nothing, while
+the rest of the spec still generates. Composed response schemas
+(`allOf`/`oneOf`/`anyOf`), OpenAPI 3.1 type arrays, deprecated
+operations, auth requirements, and envelope responses (with a
+`list_paths` hint for the nested list) are all handled and reported
+as warnings where a reviewer decision is needed.
+
 Placement (m-3): `capability_import` is offline registry tooling, not a
 runtime layer. It converts a spec into draft YAML and touches no port or
 adapter; it never edits the live registry. That is why it sits outside
@@ -202,13 +211,40 @@ the controllers → services → ports layering: the placement test applies
 to runtime code, and this code never runs in the app.
 
 The generator loop, end to end: generate → review (required, as above)
-→ `--validate` (round-trips the draft through the registry loader and
-reports id collisions against the live registry) → merge → test. `fields`
+→ test run against the reviewed draft (see below) → `--validate`
+(round-trips the draft through the registry loader and reports id
+collisions against the live registry) → merge → suite. `fields`
 are filled from a declared 200-response object schema when one exists.
 Descriptions containing instruction-like phrasing from the spec are
 flagged as warnings — spec text reaches the model verbatim through
 discovery, so such a description must be rewritten before merging, never
 merged as-is.
+
+The `--questions` file holds one case set per capability — a happy
+path, a paraphrase, a missing-required-parameter case, an
+unknown-entity case for entity lookups, and a list case for
+list-shaped responses — plus fixed controls that must match nothing.
+Values come from the spec's own examples, with placeholders (reported
+at generation time) where the spec gives none. The test run is
+hermetic: keyword-embedding discovery plus a stub API built from the
+spec's response schemas, no model and no network:
+
+    python -m agent_api.capability_import --test-run \
+        --questions questions.yaml --spec openapi.json \
+        --registry draft.yaml
+
+It checks that each question resolves to the right capability, that
+the request is built as declared, that `fields` trimming holds, and
+that missing-parameter and 404 failures surface cleanly. Run it
+against the reviewed draft before merging; a discovery failure means
+the description needs rewriting, an execution failure means the
+entry misdescribes the request. What it does not prove: value
+extraction (the file carries the values a correct extraction would
+produce), real embedding quality (the keyword harness pins ranking
+mechanics, not embedding quality), or SQL-kind capabilities
+(discovery only). The question file is a working artifact and is
+not committed; the durable regression coverage is the prompt table
+in `tests/tools/test_capability_discovery.py`.
 
 ## What the model sees
 

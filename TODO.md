@@ -91,13 +91,16 @@ can move.
   to new invocations); blue-green/canary on Lambda map to aliases with
   weighted routing; EKS canary needs an ingress/mesh mechanism (e.g. Argo
   Rollouts/Flagger). Also noted in `deploy/terraform/README.md`.
-- **Push and merge** — remote `feature/initial-platform` is fully pushed
-  (all commits including this TODO update, pushed 2026-11-03 via the
-  connector API script `~/workspace/gh_api_push.py` since git HTTPS
-  cannot use the vault credential; suites verified green before the
-  push). The earlier Workflows-permission block is resolved (PAT
-  updated 2026-10-25; PAT expires Nov 15, 2026 — extend before it
-  lapses or pushing breaks). Merging the branch is Rahul's later call.
+- **Push and merge** — remote `feature/initial-platform` tip is
+  `17c246a` (pushed 2026-11-03 via the connector API script
+  `~/workspace/gh_api_push.py` since git HTTPS cannot use the vault
+  credential; suites verified green before the push). Local-only
+  since: `bee02ec` (LangGraph OTel detail), `0b8718a`
+  (backend-agnostic observability), and the capability-generator
+  robust-loop commit (including this TODO update). The earlier
+  Workflows-permission block is resolved (PAT updated 2026-10-25;
+  PAT expires Nov 15, 2026 — extend before it lapses or pushing
+  breaks). Merging the branch is Rahul's later call.
 
 ## Capabilities and guardrails
 
@@ -117,6 +120,12 @@ can move.
   — planned gaps from `doc/guardrails.md`.
 - **Snowflake-table capability import (`--from snowflake`)** — planned,
   not built. Swagger/OpenAPI import exists.
+- **Capability test-run limits** — the swagger question runner
+  (built 2026-11-04, see `doc/data-capabilities.md`) uses a
+  keyword-embedding stand-in and file-supplied params: it pins
+  ranking mechanics and execution, not real embedding quality or
+  value extraction. Follow-up: a live-embedding spot check for
+  capabilities that warrant it; SQL kinds are not stubbed.
 - **Recorded eval set for behavior changes** — planned (see
   `doc/agent-lifecycle.md`).
 - **Response-trimming guardrail change (done 2026-11-02)** — HTTP
