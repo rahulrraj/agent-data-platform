@@ -581,3 +581,26 @@ def test_cli_entries_mode_malformed_file_exits_2(tmp_path):
     rc = main(["--entries", str(bad), "--spec", str(spec_path),
                "--questions", str(tmp_path / "q.yaml")])
     assert rc == 2
+
+
+def test_example_value_array_of_objects_returns_a_list():
+    # Regression (caught by the recorded eval set, 2026-11-05):
+    # schema_properties descends into array items, so an array of
+    # objects used to yield a single object instead of a list — a
+    # top-level array response was stubbed as an object and list
+    # shape was never visible.
+    from agent_api.capability_import.schemas import example_value
+
+    schema = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "customer_id": {"type": "string"},
+                "name": {"type": "string"},
+            },
+        },
+    }
+    body = example_value(schema, {})
+    assert isinstance(body, list) and len(body) == 1
+    assert set(body[0]) == {"customer_id", "name"}

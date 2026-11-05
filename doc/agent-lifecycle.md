@@ -52,10 +52,12 @@ Gate: tests exist for the change and the full suites pass.
 
 ### 5. Evaluate
 For behavior changes (prompts, tools, models, frameworks): run a fixed
-check that proves the behavior — today that is manual (e.g. the 6×7
-tool-use check over `/api/chat`); a recorded eval set is planned.
-Never ship a behavior change on vibes. Never tune on the test set
-(the frozen-rule discipline from the trading pipeline applies here too).
+check that proves the behavior — the recorded eval set
+(`python -m agent_api.evals`, see `doc/evals.md`) for tool behavior,
+plus the manual 6×7 tool-use check over `/api/chat` for
+model-involved behavior. Never ship a behavior change on vibes. Never
+tune on the test set (the frozen-rule discipline from the trading
+pipeline applies here too).
 
 Gate: the behavior check passes, recorded where the next person can rerun it.
 

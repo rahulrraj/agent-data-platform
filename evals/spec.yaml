@@ -1,0 +1,79 @@
+# Fixture API spec for the recorded eval set (see doc/evals.md).
+#
+# The stub API is built from these response schemas: a request whose
+# path-parameter values are known (spec examples, plus the cases
+# file's successful values) gets a 200 with an example body; any
+# other path-parameter value gets a 404. Top-level list responses
+# are served with three items so list shape is visible.
+#
+# `internal_note` is deliberately NOT in any capability's `fields`:
+# it pins the fields-trimming behavior (the executor must drop it).
+openapi: 3.0.0
+info:
+  title: Eval fixture API
+  version: "1"
+paths:
+  /customers:
+    get:
+      operationId: listCustomers
+      summary: List every customer record in the directory
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    customer_id: {type: string}
+                    name: {type: string}
+                    tier: {type: string}
+                    internal_note: {type: string}
+  /customers/{customer_id}:
+    get:
+      operationId: getCustomer
+      summary: Look up a customer's name, tier, and region by customer ID
+      parameters:
+        - name: customer_id
+          in: path
+          required: true
+          schema: {type: string}
+          description: "Customer ID, e.g. C-123"
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: {type: string}
+                  tier: {type: string}
+                  region: {type: string}
+                  internal_note: {type: string}
+  /customers/{customer_id}/orders:
+    get:
+      operationId: listOrders
+      summary: List orders placed by a customer
+      parameters:
+        - name: customer_id
+          in: path
+          required: true
+          schema: {type: string}
+          example: C-123
+        - name: limit
+          in: query
+          schema: {type: integer}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties: {order_id: {type: string}, total: {type: number}}
+                  total: {type: integer}

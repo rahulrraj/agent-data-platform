@@ -47,6 +47,9 @@ test in §11 of the architecture doc decides where code goes.
 - `src/ui/` — React chat frontend (Vite). Talks to the API over HTTP/SSE only;
   never imports backend code. See `src/ui/README.md`.
 - `registry/` — data capability registry YAML (see `doc/data-capabilities.md`).
+- `evals/` — recorded eval set: golden cases + fixture registry/spec
+  at repo root, runner in `src/agent_api/evals/`; run with
+  `python -m agent_api.evals` (see `doc/evals.md`).
 - `capability_import/` — offline tooling that drafts registry YAML from specs;
   not part of the runtime path (see `doc/data-capabilities.md`).
 

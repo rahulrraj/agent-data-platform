@@ -269,6 +269,23 @@ def _load_questions(path: str):
             raise ValueError(
                 f"question file {path!r}: bad expect_result {expect_result!r}"
             )
+        if "expect_items" in raw:
+            # Pins list trimming (max_results / keep): only meaningful
+            # for an executed case that expects a 200.
+            if not raw.get("execute") or expect_result != "ok":
+                raise ValueError(
+                    f"question file {path!r}: 'expect_items' needs "
+                    f"execute + expect_result 'ok': {raw!r}"
+                )
+            items = raw["expect_items"]
+            if (
+                isinstance(items, bool)
+                or not isinstance(items, int)
+                or items < 0
+            ):
+                raise ValueError(
+                    f"question file {path!r}: bad expect_items {items!r}"
+                )
         normalized.append(raw)
     for raw in controls:
         if not isinstance(raw, dict) or not raw.get("question"):
@@ -500,4 +517,43 @@ def _run_case(case, repository, discover, execute, requests):
                         f"list item keys {extra} are outside fields {fields}"
                     )
                     break
+    if "expect_items" in case:
+        if not isinstance(data, list):
+            result["passed"] = False
+            result["failures"].append(
+                f"expect_items {case['expect_items']} set but data "
+                "is not a list"
+            )
+        elif len(data) != case["expect_items"]:
+            result["passed"] = False
+            result["failures"].append(
+                f"expected {case['expect_items']} items, "
+                f"got {len(data)}"
+            )
     return result
+
+
+def print_report(report: dict, file=None) -> None:
+    """Print a per-case PASS/FAIL report + summary (shared by the CLIs).
+
+    ``file`` defaults to stderr, matching the CLI convention of
+    keeping stdout for machine-readable output.
+    """
+    import sys
+
+    out = sys.stderr if file is None else file
+    for case in report["cases"]:
+        label = f"{case['type']} {case['capability'] or 'control'}: {case['question']}"
+        if case["passed"]:
+            print(f"  PASS {label}", file=out)
+        else:
+            print(f"  FAIL {label}", file=out)
+            for failure in case["failures"]:
+                print(f"       {failure}", file=out)
+        for note in case["notes"]:
+            print(f"       note: {note}", file=out)
+    print(
+        f"{report['passed']} passed, {report['failed']} failed "
+        f"of {report['total']} cases",
+        file=out,
+    )

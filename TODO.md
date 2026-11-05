@@ -23,6 +23,12 @@ can move.
   reuses the existing `deploy/k8s/` manifests. Validated with
   `terraform validate` for both stacks; not yet applied to real AWS.
 
+- Recorded eval set (2026-11-05): `evals/` (cases + fixture registry
+  + spec) + `python -m agent_api.evals` runner reusing the test-run
+  harness; 8 cases + 4 controls, green. Caught a real bug on its
+  first run (`example_value` returned an object for array schemas —
+  fixed in `schemas.py`). See `doc/evals.md`.
+
 ## Live tests and verification
 
 - **Bedrock live 3-hop test** — blocked: needs Rahul's AWS credentials in
@@ -123,9 +129,10 @@ can move.
   keyword-embedding stand-in and file-supplied params: it pins
   ranking mechanics and execution, not real embedding quality or
   value extraction. Follow-up: a live-embedding spot check for
-  capabilities that warrant it; SQL kinds are not stubbed.
-- **Recorded eval set for behavior changes** — planned (see
-  `doc/agent-lifecycle.md`).
+  capabilities that warrant it; SQL kinds are not stubbed. The
+  recorded eval set (2026-11-05) pins top-level list trimming;
+  envelope (`list_paths`) trimming is covered by executor unit
+  tests only.
 - **Response-trimming guardrail change (done 2026-11-02)** — HTTP
   capabilities can now opt in per capability to `max_results` up to 500
   with `list_paths` / `keep: last` (see `doc/data-capabilities.md`).

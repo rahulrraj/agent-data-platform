@@ -153,14 +153,19 @@ def example_value(schema, spec: dict, _depth: int = 0):
     schema_type = schema.get("type")
     if isinstance(schema_type, list):
         schema_type = next((t for t in schema_type if t != "null"), "string")
+    if schema_type == "array":
+        # Arrays come first: schema_properties descends into array
+        # items, so checking it first would return the item object
+        # instead of a list — a top-level array response would be
+        # stubbed as a single object, and list shape would never
+        # be visible (caught by the recorded eval set, 2026-11-05).
+        return [example_value(schema.get("items") or {}, spec, _depth + 1)]
     props = schema_properties(schema, spec)
     if props is not None:
         return {
             name: example_value(sub, spec, _depth + 1)
             for name, sub in props.items()
         }
-    if schema_type == "array":
-        return [example_value(schema.get("items") or {}, spec, _depth + 1)]
     if schema_type == "integer":
         return 123
     if schema_type == "number":

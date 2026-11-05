@@ -145,7 +145,10 @@ def _run_test_mode(args, parser) -> int:
     except SpecLoadError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    from agent_api.capability_import.testrun import run_question_file
+    from agent_api.capability_import.testrun import (
+        print_report,
+        run_question_file,
+    )
 
     try:
         report = run_question_file(
@@ -157,21 +160,7 @@ def _run_test_mode(args, parser) -> int:
     except Exception as exc:  # noqa: BLE001 — registry load failures land here
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    for case in report["cases"]:
-        label = f"{case['type']} {case['capability'] or 'control'}: {case['question']}"
-        if case["passed"]:
-            print(f"  PASS {label}", file=sys.stderr)
-        else:
-            print(f"  FAIL {label}", file=sys.stderr)
-            for failure in case["failures"]:
-                print(f"       {failure}", file=sys.stderr)
-        for note in case["notes"]:
-            print(f"       note: {note}", file=sys.stderr)
-    print(
-        f"{report['passed']} passed, {report['failed']} failed "
-        f"of {report['total']} cases",
-        file=sys.stderr,
-    )
+    print_report(report)
     return 0 if report["failed"] == 0 else 1
 
 

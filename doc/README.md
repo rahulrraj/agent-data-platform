@@ -42,6 +42,7 @@ carries its own `Contents` section at the top.
 | Document | What it is |
 | --- | --- |
 | [`agent-lifecycle.md`](agent-lifecycle.md) | ADLC: stages, gates, and the ship checklist |
+| [`evals.md`](evals.md) | Recorded eval set: golden capability-behavior cases, run offline with `python -m agent_api.evals` |
 | [`guardrails.md`](guardrails.md) | Guardrail catalog — enforced vs. planned, honestly marked |
 | [`approvals.md`](approvals.md) | Approval matrix, what counts as approval, emergency path |
 

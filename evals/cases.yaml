@@ -1,0 +1,72 @@
+# Recorded eval set — hand-written golden cases (see doc/evals.md).
+#
+# Never edit a case to make it pass: fix the code. If a behavior
+# change is deliberate, update the affected case in the same change,
+# with the reason in the commit message — the frozen-rule discipline
+# from the trading pipeline applies here too.
+version: 1
+generated_from: recorded eval set (hand-written)
+cases:
+  - capability: get_customer
+    type: happy
+    question: "Look up a customer's name, tier, and region by customer ID: customer_id C-123"
+    params: {customer_id: C-123}
+    expected: match
+    execute: true
+    expect_result: ok
+  - capability: get_customer
+    type: paraphrase
+    question: "Find a customer's name, tier, and region by customer ID: customer_id C-123"
+    params: {customer_id: C-123}
+    expected: match
+    execute: true
+    expect_result: ok
+  - capability: get_customer
+    type: missing_param
+    question: "Look up a customer's name, tier, and region by customer ID: customer_id"
+    params: {}
+    expected: match
+    execute: true
+    expect_result: missing_param
+    missing: customer_id
+  - capability: get_customer
+    type: unknown_entity
+    question: "Look up a customer's name, tier, and region by customer ID: customer_id C-999"
+    params: {customer_id: C-999}
+    expected: match
+    execute: true
+    expect_result: not_found
+  - capability: list_orders
+    type: list
+    question: "List all orders: customer_id C-123, limit 10"
+    params: {customer_id: C-123, limit: 10}
+    expected: match
+    execute: true
+    expect_result: ok
+  - capability: list_orders
+    type: paraphrase
+    question: "Show me all orders placed by customer C-123"
+    params: {customer_id: C-123}
+    expected: match
+    execute: true
+    expect_result: ok
+  - capability: list_customers
+    type: list
+    question: "List every customer record in the directory"
+    params: {}
+    expected: match
+    execute: true
+    expect_result: ok
+    expect_items: 2
+  - capability: returns_by_customer
+    type: happy
+    question: "What are the investment returns for all accounts of customer C-123?"
+    params: {customer_id: C-123}
+    expected: match
+    execute: true
+    expect_result: ok
+controls:
+  - question: "What's the weather in Boston?"
+  - question: "Tell me a joke"
+  - question: "What is the capital of France?"
+  - question: "How do I reset my password?"

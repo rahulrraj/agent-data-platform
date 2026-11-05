@@ -1,0 +1,51 @@
+# Fixture registry for the recorded eval set (see doc/evals.md).
+#
+# NOT the live registry — its connections are remapped to the stub API
+# by the test-run harness. Mirrors the fixtures in
+# tests/test_capability_testrun.py, plus `list_customers`, which pins
+# list trimming (`max_results: 2`, `keep: last` over a three-item
+# stub response).
+capabilities:
+  - id: get_customer
+    description: "Look up a customer's name, tier, and region by customer ID"
+    kind: http
+    connection: orders_api
+    mode: read
+    parameters:
+      customer_id: {type: string, required: true, description: "Customer ID, e.g. C-123"}
+    request:
+      method: GET
+      path: "/customers/{customer_id}"
+      fields: [name, tier, region]
+  - id: list_orders
+    description: "List orders placed by a customer"
+    kind: http
+    connection: orders_api
+    mode: read
+    parameters:
+      customer_id: {type: string, required: true, description: "Customer ID, e.g. C-123"}
+      limit: {type: integer, required: false, description: "Max orders to return"}
+    request:
+      method: GET
+      path: "/customers/{customer_id}/orders"
+      fields: [items, total]
+  - id: list_customers
+    description: "List every customer record in the directory"
+    kind: http
+    connection: orders_api
+    mode: read
+    parameters: {}
+    max_results: 2
+    keep: last
+    request:
+      method: GET
+      path: "/customers"
+      fields: [customer_id, name, tier]
+  - id: returns_by_customer
+    description: "Get investment returns for all accounts of a customer"
+    kind: snowflake
+    connection: snowflake_analytics
+    mode: read
+    parameters:
+      customer_id: {type: string, required: true, description: "Customer ID, e.g. C-123"}
+    query: "SELECT account_id, return_pct FROM fact_returns WHERE customer_id = %(customer_id)s"

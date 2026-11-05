@@ -243,8 +243,11 @@ extraction (the file carries the values a correct extraction would
 produce), real embedding quality (the keyword harness pins ranking
 mechanics, not embedding quality), or SQL-kind capabilities
 (discovery only). The question file is a working artifact and is
-not committed; the durable regression coverage is the prompt table
-in `tests/tools/test_capability_discovery.py`.
+not committed; the durable regression coverage is the recorded eval
+set (`doc/evals.md`, `python -m agent_api.evals`), which reuses this
+harness over a fixture registry. The prompt table in
+`tests/tools/test_capability_discovery.py` covers discovery ranking
+at the unit level.
 
 ## What the model sees
 

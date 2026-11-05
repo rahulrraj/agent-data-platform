@@ -442,6 +442,7 @@ own `Contents` section at the top.
 | `doc/architecture-reference.md` | Checklist distilled from building this platform, for the next project |
 | `doc/data-capabilities.md` | Registry format, discovery/execution flow, guardrails, access model |
 | `doc/agent-lifecycle.md` | ADLC: stages, gates, and the ship checklist |
+| `doc/evals.md` | Recorded eval set: golden capability-behavior cases, run offline with `python -m agent_api.evals` |
 | `doc/guardrails.md` | Guardrail catalog — enforced vs. planned, honestly marked |
 | `doc/approvals.md` | Approval matrix, what counts as approval, emergency path |
 | `doc/developer-guide.md` | Working notes: layout, conventions, operations, sandbox quirks |
