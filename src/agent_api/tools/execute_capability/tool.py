@@ -21,6 +21,7 @@ deps.capability_executors.
 from __future__ import annotations
 
 import json
+import time
 
 from strands import tool
 
@@ -153,6 +154,10 @@ def create_tool(deps):
         executor = executors.get(capability.kind)
         if executor is None:
             return f"No executor configured for kind '{capability.kind}'."
+        # The execute metric mirrors the span: one count + duration
+        # per executor run (ok / error). Validation and provenance
+        # rejections return above and are not counted.
+        execute_start = time.monotonic()
         with _TRACER.start_as_current_span(
             "capability.execute",
             attributes={
@@ -168,10 +173,22 @@ def create_tool(deps):
                 # executions are visible in error views.
                 span.set_status(Status(StatusCode.ERROR))
                 span.record_exception(exc)
+                telemetry.record_capability_execute(
+                    duration_seconds=time.monotonic() - execute_start,
+                    capability_id=capability.id,
+                    kind=capability.kind,
+                    outcome="error",
+                )
                 return f"Capability failed: {exc}"
             rows, truncated = _result_shape(result)
             span.set_attribute("capability.rows", rows)
             span.set_attribute("capability.truncated", truncated)
+        telemetry.record_capability_execute(
+            duration_seconds=time.monotonic() - execute_start,
+            capability_id=capability.id,
+            kind=capability.kind,
+            outcome="ok",
+        )
         return json.dumps(result, default=str)
 
     return execute_capability

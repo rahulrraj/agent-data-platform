@@ -5,8 +5,9 @@ Date: 2026-11-03
 Status: **Accepted 2026-11-03 — implemented 2026-11-03** (Strands-native
 telemetry via the global provider, service turn spans, capability spans,
 FastAPI/HTTPX instrumentation, Lambda flush; pushed 2026-11-03; not
-deployed). No backend is configured: the backend choice is still open,
-and nothing has been verified against a real collector.
+deployed). OTel metrics added 2026-11-06 (decision 11). No backend is
+configured: the backend choice is still open, and nothing has been
+verified against a real collector.
 
 ## Contents
 
@@ -144,11 +145,40 @@ no backend, no credentials, no real-backend calls in this change.
    endpoint is configured and forces the redaction token). The
    capability spans are the exception to pure tool functions noted
    in decision 3. Both are confined to this one module / two tools.
-10. **Out of scope, recorded as follow-ups:** LangGraph-native OTel
-    detail (service spans cover LangGraph turns at turn
-    granularity); OTel metrics and derived cost (tokens are
-    recorded, pricing is never invented); tail sampling; the
-    structured audit log (a separate TODO item).
+10. **Out of scope, recorded as follow-ups:** tail sampling; the
+    structured audit log (a separate TODO item). Done since:
+    LangGraph-native OTel detail (2026-11-04, ADR 0010); OTel
+    metrics (2026-11-06, decision 11) — derived cost stays out:
+    pricing is never invented.
+11. **OTel metrics alongside the traces (2026-11-06).**
+    `platform/telemetry.py` also builds an SDK `MeterProvider`
+    (periodic OTLP reader over the same HTTP exporter) when a
+    metrics endpoint is configured
+    (`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` /
+    `OTEL_EXPORTER_OTLP_ENDPOINT`); traces and metrics are
+    independent — either may be on while the other is off.
+    Instruments, all recorded from the same seams as the spans:
+    `agent.turn.count` / `agent.turn.duration` (outcome
+    ok/error/aborted; model key + provider/id, never the
+    principal), `capability.resolve.count` /
+    `capability.resolve.duration` (outcome match/ambiguous/no_match/
+    unavailable), `capability.execute.count` /
+    `capability.execute.duration` (capability id, kind, ok/error).
+    Token usage is an `agent.tokens` counter fed by a span processor
+    that reads the real usage attributes off framework model spans —
+    Strands' per-invocation "chat" span (`gen_ai.usage.*`) and
+    OpenInference LLM spans (`llm.token_count.*`) — and deliberately
+    NOT Strands' `invoke_agent` span, which carries the same
+    run-aggregated values (reading both would double-count, verified
+    empirically). No per-model token attribution: OpenInference puts
+    no model id on its LLM spans, so attribution would be
+    asymmetric. Derived cost is not computed: no pricing is
+    configured, and none is invented. The Lambda handler's existing
+    `flush_telemetry()` call also force-flushes the meter provider,
+    so metrics survive freeze/thaw the same way spans do.
+    Recording never raises and never carries content; instruments
+    are created lazily from the global meter, so with no provider
+    installed they are silent no-ops.
 
 ## Consequences
 
@@ -182,7 +212,13 @@ no backend, no credentials, no real-backend calls in this change.
   local stub receiver (arrival + path + content-type only — protobuf
   is never decoded). Tests that install a global provider reset
   OTel/Strands global state in teardown (`otel_global_state`
-  fixture) so the suite stays hermetic.
+  fixture) so the suite stays hermetic. Metrics (decision 11,
+  2026-11-06) add 14 tests in tests/test_telemetry_metrics.py —
+  counts/durations against an in-memory metric reader, the usage
+  processor against a stub-model Strands run (asserting no double
+  count), and a metrics-export smoke test against the stub receiver.
+  The backend suite is 540 passed / 4 skipped; 71 of those are
+  telemetry tests.
 - Verified against the installed Strands 1.57.1 only. A Strands
   upgrade that changes span names, the redaction mechanism, or the
   tracer singleton will trip `tests/test_telemetry_strands.py`
@@ -193,10 +229,15 @@ no backend, no credentials, no real-backend calls in this change.
 - Wire whichever OTLP backend the deployment uses
   (`OTEL_EXPORTER_OTLP_ENDPOINT` + `OTEL_EXPORTER_OTLP_HEADERS`
   for auth) — no backend is chosen in code (backend-agnostic
-  direction, 2026-11-04). Then verify live: spans arriving,
-  content redaction holding end to end, and the Lambda flush
-  under a real freeze/thaw cycle.
+  direction, 2026-11-04). Then verify live: spans and metrics
+  arriving, content redaction holding end to end, and the Lambda
+  flush under a real freeze/thaw cycle.
 - Re-check the Strands content default on every Strands upgrade
   (the empirical tests pin 1.57.1's behavior).
 - LangGraph-native span detail: done 2026-11-04, see ADR 0010.
-  OTel metrics remain a follow-up (see TODO.md).
+  OTel metrics: done 2026-11-06, see decision 11. Remaining
+  follow-up: live verification of metrics export against a deployed
+  backend, and re-checking the Strands usage attribute keys
+  (`gen_ai.usage.*`) on every Strands upgrade — the usage processor
+  depends on those names, as it does on `llm.token_count.*` for
+  OpenInference.

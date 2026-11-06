@@ -71,3 +71,28 @@ def otel_global_state():
         uninstrument_langchain()
     except Exception:  # noqa: BLE001, S110 — teardown hygiene only
         pass
+    # Meter provider: the same once-only global rule as the tracer. A
+    # test that installs a meter provider (real or test) would
+    # otherwise leak into later tests. The instrument cache in
+    # telemetry.py must go too, or later records would bind to the
+    # dead provider's instruments.
+    try:
+        import opentelemetry.metrics._internal as metrics_api
+
+        meter_provider = metrics_api._METER_PROVIDER  # noqa: SLF001
+        shutdown = getattr(meter_provider, "shutdown", None)
+        if callable(shutdown):
+            try:
+                shutdown()
+            except Exception:  # noqa: BLE001, S110 — teardown hygiene only
+                pass
+        metrics_api._METER_PROVIDER = None  # noqa: SLF001
+        metrics_api._METER_PROVIDER_SET_ONCE = Once()  # noqa: SLF001
+    except Exception:  # noqa: BLE001, S110 — teardown hygiene only
+        pass
+    try:
+        from agent_api.platform import telemetry as _telemetry
+
+        _telemetry._METRIC_INSTRUMENTS = None  # noqa: SLF001
+    except Exception:  # noqa: BLE001, S110 — teardown hygiene only
+        pass

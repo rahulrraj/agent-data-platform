@@ -62,6 +62,8 @@ import logging
 import os
 from urllib.parse import urlsplit, urlunsplit
 
+from opentelemetry.sdk.trace import SpanProcessor
+
 logger = logging.getLogger(__name__)
 
 #: Token that forces Strands' span-content redaction with an empty
@@ -323,14 +325,26 @@ def setup_telemetry(*, lambda_runtime: bool, app=None):
     treats None as "tracing stays a silent no-op" and must not fail
     startup over it. Content redaction is enforced unconditionally
     (see :func:`enforce_content_redaction`).
+
+    Metrics ride the same endpoint decision: when a metrics endpoint
+    is configured, a meter provider is installed and the token-usage
+    processor is attached to the tracer provider (when one is built).
+    Traces and metrics are independent — either may be on while the
+    other is off, depending on which endpoint variables are set.
     """
     enforce_content_redaction()
     provider = _build_tracer_provider(lambda_runtime=lambda_runtime)
+    meter_provider = _build_meter_provider()
+    if meter_provider is not None:
+        from opentelemetry import metrics
+
+        metrics.set_meter_provider(meter_provider)
     if provider is None:
         return None
     from opentelemetry import trace
 
     trace.set_tracer_provider(provider)
+    provider.add_span_processor(UsageMetricsSpanProcessor())
     _set_propagators()
     _instrument_httpx()
     instrument_langchain(provider)
@@ -340,11 +354,11 @@ def setup_telemetry(*, lambda_runtime: bool, app=None):
 
 
 def flush_telemetry(timeout_millis: int = 5000) -> None:
-    """Force-flush the global provider; safe no-op when telemetry is off.
+    """Force-flush the global providers; safe no-op when telemetry is off.
 
     The Lambda handler calls this at the end of every invocation so
-    buffered spans cannot be lost to freeze/thaw. Failures are logged
-    and swallowed: telemetry must never fail a request.
+    buffered spans and metrics cannot be lost to freeze/thaw. Failures
+    are logged and swallowed: telemetry must never fail a request.
     """
     try:
         from opentelemetry import trace
@@ -355,6 +369,15 @@ def flush_telemetry(timeout_millis: int = 5000) -> None:
             force_flush(timeout_millis)
     except Exception:  # noqa: BLE001 — telemetry must never fail a request
         logger.exception("telemetry flush failed")
+    try:
+        from opentelemetry import metrics
+
+        meter_provider = metrics.get_meter_provider()
+        force_flush = getattr(meter_provider, "force_flush", None)
+        if callable(force_flush):
+            force_flush(timeout_millis)
+    except Exception:  # noqa: BLE001 — telemetry must never fail a request
+        logger.exception("telemetry metrics flush failed")
 
 
 def get_tracer(name: str):
@@ -362,3 +385,303 @@ def get_tracer(name: str):
     from opentelemetry import trace
 
     return trace.get_tracer(name)
+
+
+# --- Metrics (OTel Metrics API) -------------------------------------------
+#
+# Counts and durations for turns and capability calls, plus token
+# usage read off framework model spans. Same rules as traces:
+# endpoint from the standard OTel environment only, strict no-op
+# when unconfigured, HTTP/protobuf only, no backend chosen here.
+# Recording never raises and never carries content: metric
+# attributes are ids, keys, kinds, and coarse outcomes only — never
+# the principal, never message text, never parameter values.
+#
+# Instruments are created lazily on first use from the global meter
+# (see _get_instruments): a proxy-meter instrument created before a
+# provider exists drops records made before the provider is set
+# (verified empirically), and setup runs before any turn in
+# production, so lazy creation binds to the real provider. Tests
+# install a test provider first, then clear the cache (see
+# tests/test_telemetry_metrics.py).
+
+_METER_NAME = "agent_api.telemetry"
+
+_TURN_COUNT = "agent.turn.count"
+_TURN_DURATION = "agent.turn.duration"
+_RESOLVE_COUNT = "capability.resolve.count"
+_RESOLVE_DURATION = "capability.resolve.duration"
+_EXECUTE_COUNT = "capability.execute.count"
+_EXECUTE_DURATION = "capability.execute.duration"
+_TOKENS = "agent.tokens"
+
+#: Duration histogram buckets (seconds). The SDK defaults are tuned
+#: for milliseconds-scale HTTP spans; turn durations run
+#: sub-second to minutes, capability calls sub-second to tens of
+#: seconds, so explicit boundaries keep the buckets meaningful.
+_TURN_DURATION_BUCKETS = (0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300)
+_CAPABILITY_DURATION_BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30)
+
+#: Lazily-created instruments, keyed by attribute name below. Reset
+#: to None by tests that swap the global meter provider.
+_METRIC_INSTRUMENTS = None
+
+
+def get_meter(name: str):
+    """Meter for `name` from the global provider (no-op when off)."""
+    from opentelemetry import metrics
+
+    return metrics.get_meter(name)
+
+
+def metrics_endpoint_configured() -> bool:
+    """True when the standard OTel endpoint variables name a backend
+    for metrics (signal-specific or generic)."""
+    return bool(
+        os.environ.get("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "").strip()
+        or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
+    )
+
+
+def _grpc_requested_for_metrics() -> bool:
+    """True when the operator asked for the gRPC OTLP protocol for metrics."""
+    for var in ("OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL"):
+        if os.environ.get(var, "").strip().lower() == "grpc":
+            return True
+    return False
+
+
+def _build_meter_provider():
+    """Build the SDK meter provider, or None when metrics are off.
+
+    Periodic exporting reader over the OTLP HTTP exporter; the
+    exporter reads its endpoint/headers from the standard OTel
+    environment itself. On Lambda the reader's background thread may
+    never run before freeze — flush_telemetry() force-flushes at the
+    end of every invocation, so metrics still leave on the
+    invocation boundary.
+    """
+    from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+        OTLPMetricExporter,
+    )
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    from opentelemetry.sdk.resources import Resource
+
+    if not metrics_endpoint_configured():
+        return None
+    if _grpc_requested_for_metrics():
+        logger.warning(
+            "OTLP gRPC protocol requested but this service exports "
+            "HTTP/protobuf only; metrics stay off"
+        )
+        return None
+    reader = PeriodicExportingMetricReader(OTLPMetricExporter())
+    resource = Resource.create({"service.name": _DEFAULT_SERVICE_NAME})
+    return MeterProvider(metric_readers=[reader], resource=resource)
+
+
+def _get_instruments() -> dict:
+    """The metric instruments, created once from the global meter."""
+    global _METRIC_INSTRUMENTS
+    if _METRIC_INSTRUMENTS is None:
+        meter = get_meter(_METER_NAME)
+        _METRIC_INSTRUMENTS = {
+            "turn_count": meter.create_counter(
+                _TURN_COUNT, unit="1", description="Agent turns completed"
+            ),
+            "turn_duration": meter.create_histogram(
+                _TURN_DURATION,
+                unit="s",
+                description="Agent turn wall time",
+                explicit_bucket_boundaries_advisory=list(_TURN_DURATION_BUCKETS),
+            ),
+            "resolve_count": meter.create_counter(
+                _RESOLVE_COUNT,
+                unit="1",
+                description="Capability discovery attempts",
+            ),
+            "resolve_duration": meter.create_histogram(
+                _RESOLVE_DURATION,
+                unit="s",
+                description="Capability discovery wall time",
+                explicit_bucket_boundaries_advisory=list(
+                    _CAPABILITY_DURATION_BUCKETS
+                ),
+            ),
+            "execute_count": meter.create_counter(
+                _EXECUTE_COUNT,
+                unit="1",
+                description="Capability executions",
+            ),
+            "execute_duration": meter.create_histogram(
+                _EXECUTE_DURATION,
+                unit="s",
+                description="Capability execution wall time",
+                explicit_bucket_boundaries_advisory=list(
+                    _CAPABILITY_DURATION_BUCKETS
+                ),
+            ),
+            "tokens": meter.create_counter(
+                _TOKENS,
+                unit="{token}",
+                description="Model tokens consumed (input/output)",
+            ),
+        }
+    return _METRIC_INSTRUMENTS
+
+
+def record_turn(
+    *,
+    duration_seconds: float,
+    model_key: str,
+    outcome: str,
+    provider: str | None = None,
+    model_id: str | None = None,
+) -> None:
+    """Record one completed turn: count + duration.
+
+    `outcome` is "ok", "error", or "aborted". Attributes are the
+    allowlist model key and (when the resolver described it) the
+    provider/model id — never the principal: per-user metrics would
+    explode cardinality and leak identity into the backend. Never
+    raises: metrics must never fail a turn.
+    """
+    try:
+        instruments = _get_instruments()
+        attributes: dict = {
+            "agent.model.key": model_key,
+            "agent.turn.outcome": outcome,
+        }
+        if provider is not None:
+            attributes["agent.model.provider"] = provider
+        if model_id is not None:
+            attributes["agent.model.id"] = model_id
+        instruments["turn_count"].add(1, attributes)
+        instruments["turn_duration"].record(duration_seconds, attributes)
+    except Exception:  # noqa: BLE001 — metrics must never fail a turn
+        logger.exception("turn metric recording failed")
+
+
+def record_capability_resolve(*, duration_seconds: float, outcome: str) -> None:
+    """Record one discovery attempt: count + duration.
+
+    `outcome` is "match", "ambiguous", "no_match", or "unavailable".
+    No capability id: on no_match there is none, and on ambiguous
+    there are two — the span carries the ids, the metric counts the
+    outcome. Never raises.
+    """
+    try:
+        instruments = _get_instruments()
+        attributes = {"capability.resolve.outcome": outcome}
+        instruments["resolve_count"].add(1, attributes)
+        instruments["resolve_duration"].record(duration_seconds, attributes)
+    except Exception:  # noqa: BLE001 — metrics must never fail a turn
+        logger.exception("capability-resolve metric recording failed")
+
+
+def record_capability_execute(
+    *,
+    duration_seconds: float,
+    capability_id: str,
+    kind: str,
+    outcome: str,
+) -> None:
+    """Record one executor run: count + duration.
+
+    `outcome` is "ok" or "error" (executor failure). Validation and
+    provenance rejections happen before the executor runs and are not
+    counted here — the metric mirrors the `capability.execute` span.
+    Never raises.
+    """
+    try:
+        instruments = _get_instruments()
+        attributes = {
+            "capability.id": capability_id,
+            "capability.kind": kind,
+            "capability.execute.outcome": outcome,
+        }
+        instruments["execute_count"].add(1, attributes)
+        instruments["execute_duration"].record(duration_seconds, attributes)
+    except Exception:  # noqa: BLE001 — metrics must never fail a turn
+        logger.exception("capability-execute metric recording failed")
+
+
+def record_tokens(*, input_tokens: int, output_tokens: int) -> None:
+    """Record model token usage: one count per direction.
+
+    No model attribute: Strands carries `gen_ai.request.model` on the
+    span but OpenInference does not put a model id on its LLM spans,
+    so per-model attribution would be asymmetric — the turn counter
+    already breaks turns down by model key. Never raises.
+    """
+    try:
+        instruments = _get_instruments()
+        counter = instruments["tokens"]
+        if input_tokens > 0:
+            counter.add(input_tokens, {"agent.token.type": "input"})
+        if output_tokens > 0:
+            counter.add(output_tokens, {"agent.token.type": "output"})
+    except Exception:  # noqa: BLE001 — metrics must never fail a turn
+        logger.exception("token metric recording failed")
+
+
+class UsageMetricsSpanProcessor(SpanProcessor):
+    """Turn framework token usage into the `agent.tokens` counter.
+
+    Reads usage off model spans at export time — the only seam that
+    sees the real numbers. The gateway result type exposes neither
+    usage nor stop reason (ADR 0009 decision 2), and the service
+    must not invent them; Strands' own spans carry the real
+    `gen_ai.usage.*` values, OpenInference's LLM spans the real
+    `llm.token_count.*` values (both pinned by tests).
+
+    Only per-invocation spans are read: Strands' "chat" span (one
+    per model call) and OpenInference LLM-kind spans. Strands'
+    `invoke_agent` span carries the same run-aggregated values, so
+    reading it too would double-count. Redaction does not touch
+    usage — Strands redacts content attributes only — but a value
+    that is not a plain integer (e.g. a "[REDACTED]" string from a
+    future version) is ignored rather than recorded. Never raises:
+    a metrics failure must not break span export.
+    """
+
+    def on_start(self, span, parent_context=None):
+        return None
+
+    def on_end(self, span):
+        try:
+            attributes = span.attributes or {}
+            if span.name == "chat":
+                input_tokens = attributes.get("gen_ai.usage.input_tokens")
+                output_tokens = attributes.get("gen_ai.usage.output_tokens")
+            elif attributes.get("openinference.span.kind") == "LLM":
+                input_tokens = attributes.get("llm.token_count.prompt")
+                output_tokens = attributes.get("llm.token_count.completion")
+            else:
+                return None
+            input_tokens = (
+                input_tokens
+                if isinstance(input_tokens, int)
+                and not isinstance(input_tokens, bool)
+                else 0
+            )
+            output_tokens = (
+                output_tokens
+                if isinstance(output_tokens, int)
+                and not isinstance(output_tokens, bool)
+                else 0
+            )
+            if input_tokens > 0 or output_tokens > 0:
+                record_tokens(
+                    input_tokens=input_tokens, output_tokens=output_tokens
+                )
+        except Exception:  # noqa: BLE001 — metrics must never break export
+            logger.exception("usage-metrics span processing failed")
+        return None
+
+    def shutdown(self):
+        return None
+
+    def force_flush(self, timeout_millis=None):
+        return True

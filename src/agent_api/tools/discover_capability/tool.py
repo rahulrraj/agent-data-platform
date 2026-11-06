@@ -52,6 +52,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+import time
 
 from strands import tool
 
@@ -223,18 +224,34 @@ def create_tool(deps):
         both are returned with scores; if nothing matches, it says so
         instead of guessing.
         """
+        # The resolve metric mirrors the span's coverage but times the
+        # whole tool call (embedding + ranking), not just the ranking
+        # the span covers. Outcomes: match / ambiguous / no_match /
+        # unavailable (index or embed failure, dimension mismatch, or
+        # an empty registry — nothing to resolve against).
+        resolve_start = time.monotonic()
+
+        def _record(outcome: str) -> None:
+            telemetry.record_capability_resolve(
+                duration_seconds=time.monotonic() - resolve_start,
+                outcome=outcome,
+            )
+
         try:
             index = _index()
         except Exception as exc:  # noqa: BLE001
+            _record("unavailable")
             return (
                 "Data capability lookup is temporarily unavailable: "
                 f"{exc}. Say you cannot look it up."
             )
         if not index:
+            _record("unavailable")
             return "No data capabilities are configured."
         try:
             query_vector = embedding_gateway.embed([need])[0]
         except Exception as exc:  # noqa: BLE001
+            _record("unavailable")
             return (
                 "Data capability lookup is temporarily unavailable: "
                 f"{exc}. Say you cannot look it up."
@@ -256,6 +273,7 @@ def create_tool(deps):
                 # instead of a wrong ranking.
                 span.set_attribute("capability.matched", False)
                 cache.pop("vectors", None)
+                _record("unavailable")
                 return (
                     "Data capability lookup is temporarily unavailable: "
                     "embedding dimension mismatch. Say you cannot look it up."
@@ -263,6 +281,7 @@ def create_tool(deps):
             best, best_score = scored[0]
             if best_score < similarity_threshold:
                 span.set_attribute("capability.matched", False)
+                _record("no_match")
                 return "No data capability matches that need. Say you cannot look it up."
             span.set_attribute("capability.matched", True)
             span.set_attribute("capability.id", best.id)
@@ -276,6 +295,7 @@ def create_tool(deps):
                 second, second_score = scored[1]
                 if discovered is not None:
                     discovered.add(second.id)
+                _record("ambiguous")
                 return json.dumps(
                     {
                         "ambiguous": True,
@@ -286,6 +306,7 @@ def create_tool(deps):
                     }
                 )
             span.set_attribute("capability.ambiguous", False)
+            _record("match")
             return json.dumps(_capability_json(best, best_score))
 
     return discover_capability

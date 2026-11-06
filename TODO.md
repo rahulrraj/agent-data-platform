@@ -29,6 +29,11 @@ can move.
   first run (`example_value` returned an object for array schemas —
   fixed in `schemas.py`). See `doc/evals.md`.
 
+- OTel metrics (2026-11-06): turn/capability counts + durations and
+  a token-usage counter (ADR 0009 decision 11); 14 new tests,
+  backend suite 540 passed / 4 skipped, eval set 12/12. Local-only;
+  see the push entry below.
+
 ## Live tests and verification
 
 - **Bedrock live 3-hop test** — blocked: needs Rahul's AWS credentials in
@@ -151,9 +156,9 @@ can move.
   content family via an explicit TraceConfig — verified empirically,
   see ADR 0010); endpoint from `OTEL_EXPORTER_OTLP_*` env,
   silent no-op when unconfigured; 100% sampling default; Lambda uses a
-  synchronous span processor + per-invocation force-flush. 57 tests
+  synchronous span processor + per-invocation force-flush. 71 tests
   (in-memory exporter + stub-model Strands and LangGraph checks +
-  stub-receiver smoke test). Remaining follow-ups:
+  stub-receiver smoke test + in-memory metric reader checks). Remaining follow-ups:
   - **Backend stays open by design** (Rahul 2026-11-04): no backend is
     chosen — any OTLP/HTTP backend works via `OTEL_EXPORTER_OTLP_ENDPOINT`
     + headers, with no backend-specific code in the repo (verified by
@@ -163,8 +168,19 @@ can move.
     CloudWatch's OTLP endpoints need SigV4 signing, which the plain
     exporter cannot do — that is a deployment-layer adapter (ADOT),
     not a code change.
-  - **OTel metrics / derived cost** — tokens are recorded on spans;
-    pricing is never invented; metrics export is not built.
+- **OTel metrics (done 2026-11-06, ADR 0009 decision 11)** —
+    `agent.turn` + `capability.resolve` / `capability.execute`
+    counts and durations, plus an `agent.tokens` counter fed by a
+    span processor reading the real usage attributes off Strands
+    "chat" spans and OpenInference LLM spans (never the
+    run-aggregated `invoke_agent` span — that would double-count).
+    Export via the standard `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`
+    / `OTEL_EXPORTER_OTLP_ENDPOINT`; traces and metrics are
+    independent. Derived cost is not computed: pricing is never
+    invented. Remaining follow-ups: live verification of metrics
+    export against a deployed backend; re-check the Strands usage
+    attribute keys on every Strands upgrade (the processor depends
+    on `gen_ai.usage.*`, pinned by `tests/test_telemetry_metrics.py`).
   - Re-check the Strands content default on every Strands upgrade
     (`tests/test_telemetry_strands.py` pins 1.57.1's behavior).
   - Re-check the OpenInference content hiding on every OpenInference

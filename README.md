@@ -15,7 +15,7 @@ including organization data discovered by meaning from the capability registry.
 - [Layers and dependency rules](#layers-and-dependency-rules)
 - [Switching framework and model](#switching-framework-and-model)
 - [Resilience](#resilience)
-- [Observability (OTLP tracing, ADR 0009)](#observability-otlp-tracing-adr-0009)
+- [Observability (OTLP tracing and metrics, ADR 0009)](#observability-otlp-tracing-and-metrics-adr-0009)
 - [Run it](#run-it)
 - [Web UI](#web-ui)
 - [Deploy on Kubernetes](#deploy-on-kubernetes)
@@ -202,7 +202,7 @@ field selects one (ADR 0007). The framework does not vary per request.
   adapter (`memory` default, `sqlite` for restart-proof single host,
   Postgres built for multi-instance).
 
-## Observability (OTLP tracing, ADR 0009)
+## Observability (OTLP tracing and metrics, ADR 0009)
 
 Tracing is OpenTelemetry, Strands-native: framework spans
 (`invoke_agent`, `chat`, `execute_tool`) nest under one `agent.turn`
@@ -218,13 +218,22 @@ values, or the bearer token. Content capture is forced OFF (Strands
 emits content unredacted by default; setup overrides that
 unconditionally — see the ADR).
 
+Metrics ride the same endpoint decision: `agent.turn.count` /
+`agent.turn.duration`, `capability.resolve.count` /
+`capability.resolve.duration`, and `capability.execute.count` /
+`capability.execute.duration`, plus an `agent.tokens` counter read off
+the framework model spans' real usage attributes. Traces and metrics
+are independent — either may be on while the other is off. No derived
+cost is computed: no pricing is configured, and none is invented.
+
 Configuration is the standard OTel environment; sampling is the SDK
 default (100%) unless `OTEL_TRACES_SAMPLER` says otherwise:
 
 | Variable | Meaning | Default |
 | --- | --- | --- |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Base OTLP/HTTP endpoint (`/v1/traces` appended) | _(unset: tracing is a silent no-op)_ |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Base OTLP/HTTP endpoint (`/v1/traces` and `/v1/metrics` appended) | _(unset: tracing and metrics are silent no-ops)_ |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Full traces endpoint, used verbatim | _(unset)_ |
+| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Full metrics endpoint, used verbatim | _(unset)_ |
 | `OTEL_EXPORTER_OTLP_HEADERS` / `OTEL_EXPORTER_OTLP_TRACES_HEADERS` | Export auth headers | _(unset)_ |
 | `OTEL_SERVICE_NAME` | Service name in spans | `agent-api` |
 | `OTEL_TRACES_SAMPLER` | Sampler, e.g. `parentbased_traceidratio` + `OTEL_TRACES_SAMPLER_ARG` | SDK default (100%) |
