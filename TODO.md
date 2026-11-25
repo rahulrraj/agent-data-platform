@@ -269,13 +269,11 @@ can move.
   picked — either a deploy step in the pipeline or a call to the
   per-platform deploy workflow.
 - **Push and merge** — remote `feature/initial-platform` tip is
-  `2d5e77f` (pushed 2026-11-25, verified — all 13 commits replayed
-  with identical SHAs: run guide namespace fix, TODO notes, per-user
-  history + relevance window, app-only EKS, GitLab CI, deferred
-  External Secrets Operator, capability description overrides, docs
-  book reorg, recency-by-default history, Bedrock Sonnet kind run).
-  Note: the push worked with the stored credential, so the Nov 15
-  PAT-expiry warning is stale — the credential is valid as of
+  `2d8a929` (pushed 2026-11-25, verified — the 13-commit push to
+  `2d5e77f` plus the TODO push-state note). Local-only since then:
+  `3d365db` (Lambda stack takes an existing VPC; networking module
+  deleted). Note: the push worked with the stored credential, so the
+  Nov 15 PAT-expiry warning is stale — the credential is valid as of
   2026-11-25. Push on Rahul's word via the connector API script
   `~/workspace/gh_api_push.py` (git HTTPS cannot use the vault
   credential). Merging the branch is Rahul's later call.
