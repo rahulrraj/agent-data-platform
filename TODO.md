@@ -263,6 +263,17 @@ can move.
   — planned gaps from `doc/guardrails.md`.
 - **Snowflake-table capability import (`--from snowflake`)** — planned,
   not built. Swagger/OpenAPI import exists.
+- **Capability description overrides (done 2026-11-25)** — `--overrides
+  overrides.yaml` on the capability generator
+  (`src/agent_api/capability_import/overrides.py`): a human-edited,
+  generator-read-only file keyed by capability id replaces the Swagger
+  capability/parameter descriptions deterministically on every re-run;
+  unknown ids/parameters warn, malformed file exits 2. See
+  `skills/capability-generator/SKILL.md` ("Override poor spec
+  descriptions"). Still open: overrides are keyed by generated id, so
+  renaming an `operationId` orphans the override (warned, not applied);
+  no override support for `fields`/`list_paths`, or for
+  `--from snowflake` (planned, not built).
 - **Capability test-run limits** — the swagger question runner
   (built 2026-11-04, see `doc/data-capabilities.md`) uses a
   keyword-embedding stand-in and file-supplied params: it pins

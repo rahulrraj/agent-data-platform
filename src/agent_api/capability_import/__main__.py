@@ -33,6 +33,27 @@ the review edits):
 
     python -m agent_api.capability_import --entries draft.yaml \\
         --spec openapi.json --questions questions.yaml
+
+Override poor spec descriptions, deterministically (the overrides
+file is a reviewed input: a human writes it, the generator only
+reads it and never writes to it, so the override survives every
+re-run byte-for-byte):
+
+    python -m agent_api.capability_import --from swagger \\
+        --spec openapi.json --connection orders_api --out draft.yaml \\
+        --overrides overrides.yaml
+
+``overrides.yaml`` format (keyed by generated capability id)::
+
+    overrides:
+      get_customer_by_id:
+        description: "Returns for all accounts of a customer"
+        parameters:
+          customer_id: "Customer ID, e.g. C-123"
+
+An override for an id no generated capability carries is a
+warning, not an error: generation still proceeds and the report
+names the id.
 """
 
 from __future__ import annotations
@@ -135,7 +156,7 @@ def _run_test_mode(args, parser) -> int:
         parser.error("--test-run requires --questions (the question file to run)")
     if not args.spec:
         parser.error("--test-run requires --spec (the API spec, for the stub)")
-    if args.source or args.connection or args.out:
+    if args.source or args.connection or args.out or args.overrides:
         print(
             "  note: ignoring generation options in --test-run mode",
             file=sys.stderr,
@@ -201,8 +222,10 @@ def _write_questions(entries, spec, args) -> int:
 
 
 def _run_entries_mode(args, parser) -> int:
-    if args.source or args.connection or args.out:
-        parser.error("--entries does not take --from, --connection or --out")
+    if args.source or args.connection or args.out or args.overrides:
+        parser.error("--entries does not take --from, --connection, --out "
+                     "or --overrides (entries already carry the reviewed "
+                     "descriptions)")
     if not args.questions:
         parser.error("--entries requires --questions (the file to write)")
     if not args.spec:
@@ -293,6 +316,11 @@ def main(argv=None) -> int:
                         help="existing draft/registry YAML to generate "
                         "questions from (instead of --from); keeps "
                         "reviewed descriptions")
+    parser.add_argument("--overrides", default=None,
+                        help="overrides YAML (reviewed input, keyed by "
+                        "capability id) whose descriptions replace the "
+                        "spec's on every run; the generator never writes "
+                        "to this file")
     parser.add_argument("--test-run", action="store_true",
                         help="run a question file against the registry + "
                         "a stub API built from the spec (no model, "
@@ -317,7 +345,21 @@ def main(argv=None) -> int:
     except SpecLoadError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    entries, report = _SOURCES[args.source](spec, args.connection)
+    overrides = None
+    if args.overrides:
+        from agent_api.capability_import.overrides import (
+            OverridesLoadError,
+            load_overrides,
+        )
+
+        try:
+            overrides, override_warnings = load_overrides(args.overrides)
+        except OverridesLoadError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        for warning in override_warnings:
+            print(f"  warning: {warning}", file=sys.stderr)
+    entries, report = _SOURCES[args.source](spec, args.connection, overrides)
 
     # Errors first: a broken spec writes nothing, whatever else was asked.
     for error in report["errors"]:

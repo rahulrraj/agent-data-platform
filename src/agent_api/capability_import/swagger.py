@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 
+from agent_api.capability_import.overrides import apply_override
 from agent_api.capability_import.schemas import (
     deref,
     is_array_schema,
@@ -229,8 +230,14 @@ def _auth_warning(capability_id: str, op: dict, spec: dict) -> str | None:
     )
 
 
-def capabilities_from_spec(spec, connection: str):
+def capabilities_from_spec(spec, connection: str, overrides: dict | None = None):
     """Return (entries, report) for the GET operations in an OpenAPI/Swagger doc.
+
+    ``overrides`` (from ``overrides.load_overrides``) maps capability
+    id -> description/parameter overrides; an override replaces the
+    spec text for that capability deterministically on every run.
+    Overrides naming an id no generated capability carries are
+    reported as warnings, never silently ignored or fatal.
 
     Never raises for a malformed spec: a non-object spec or a
     non-object ``paths`` yields an empty entry list with a report
@@ -283,7 +290,8 @@ def capabilities_from_spec(spec, connection: str):
                 continue
             try:
                 entry, warnings = _operation_entry(
-                    method, path, op, spec, connection, used_ids, shared_params
+                    method, path, op, spec, connection, used_ids, shared_params,
+                    overrides,
                 )
             except Exception as exc:  # noqa: BLE001 — one bad op must not kill the run
                 report["errors"].append(f"{method.upper()} {path}: {exc}; skipped")
@@ -291,12 +299,28 @@ def capabilities_from_spec(spec, connection: str):
             report["warnings"].extend(warnings)
             entries.append(entry)
 
+    if overrides:
+        generated_ids = {e["id"] for e in entries}
+        for capability_id in overrides:
+            if capability_id not in generated_ids:
+                report["warnings"].append(
+                    f"override for unknown capability id {capability_id!r}: "
+                    "no matching capability in the spec; ignored"
+                )
     report["count"] = len(entries)
     return entries, report
 
 
-def _operation_entry(method, path, op, spec, connection, used_ids, shared_params):
+def _operation_entry(method, path, op, spec, connection, used_ids, shared_params,
+                     overrides=None):
     """Build one draft entry. Returns (entry, warnings).
+
+    ``overrides`` maps capability id -> override dict; the override
+    for this operation's id (if any) is applied BEFORE the
+    description-dependent warnings, so an overridden description
+    neither triggers the "generated placeholder" warning nor inherits
+    a warning about instruction-like phrasing in the spec text it
+    replaced — the final text is what gets checked.
 
     Raises ValueError when the operation itself is broken (an
     unresolvable ``$ref``); the caller drops the operation with a
@@ -330,6 +354,22 @@ def _operation_entry(method, path, op, spec, connection, used_ids, shared_params
     if not description:
         description, generated = f"{method.upper()} {path}", True
     capability_id = _capability_id(op.get("operationId"), method, path, used_ids)
+    override = (overrides or {}).get(capability_id)
+    if override is not None:
+        # Apply to the working values via a provisional entry shaped
+        # like the finished one, so the description-placeholder flag
+        # and the instruction-phrasing check below see the final
+        # text. Values are replaced in place — key order untouched —
+        # so output stays byte-identical across runs.
+        provisional = {
+            "id": capability_id,
+            "description": description,
+            "parameters": params,
+        }
+        warnings.extend(apply_override(provisional, override))
+        if provisional["description"] != description:
+            description = provisional["description"]
+            generated = False
     if generated:
         warnings.append(
             f"{capability_id}: no summary/description in spec — "
@@ -341,10 +381,10 @@ def _operation_entry(method, path, op, spec, connection, used_ids, shared_params
     if auth_warning:
         warnings.append(auth_warning)
     # m-6: flag instruction-like phrasing anywhere in the text
-    # that will reach the model (summary, description, param
-    # descriptions). Warning only — review decides.
+    # that will reach the model (final description — spec text or
+    # override — and param descriptions). Warning only — review decides.
     spec_text = " ".join(
-        [op.get("summary") or "", op.get("description") or ""]
+        [description]
         + [p["description"] for p in params.values() if p.get("description")]
     )
     if any(p.search(spec_text) for p in _INSTRUCTION_PATTERNS):

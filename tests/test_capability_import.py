@@ -604,3 +604,169 @@ def test_example_value_array_of_objects_returns_a_list():
     body = example_value(schema, {})
     assert isinstance(body, list) and len(body) == 1
     assert set(body[0]) == {"customer_id", "name"}
+
+
+# --- description overrides (deterministic re-runs) ---
+
+_OVERRIDES_TEXT = """\
+overrides:
+  get_customer_by_id:
+    description: "Returns for all accounts of a customer"
+    parameters:
+      customer_id: "Customer ID, e.g. C-123"
+"""
+
+
+def _write_spec_and_overrides(tmp_path, overrides_text=_OVERRIDES_TEXT):
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(_OPENAPI3))
+    overrides_path = tmp_path / "overrides.yaml"
+    overrides_path.write_text(overrides_text)
+    return spec_path, overrides_path
+
+
+def test_overrides_replace_capability_and_parameter_descriptions(tmp_path):
+    from agent_api.capability_import.overrides import load_overrides
+
+    _, overrides_path = _write_spec_and_overrides(tmp_path)
+    overrides, warnings = load_overrides(str(overrides_path))
+    assert warnings == []
+    entries, report = capabilities_from_spec(_OPENAPI3, "orders_api", overrides)
+    cap = entries[0]
+    assert cap["id"] == "get_customer_by_id"
+    assert cap["description"] == "Returns for all accounts of a customer"
+    assert cap["parameters"]["customer_id"]["description"] == (
+        "Customer ID, e.g. C-123"
+    )
+    # The other capability is untouched, and no warning fires for it.
+    assert entries[1]["description"] == "GET /customers/{customer_id}/returns"
+    assert not report["errors"]
+
+
+def test_override_replaces_generated_placeholder_without_warning(tmp_path):
+    from agent_api.capability_import.overrides import load_overrides
+
+    overrides_path = tmp_path / "overrides.yaml"
+    overrides_path.write_text(
+        "overrides:\n"
+        "  get_customers_customer_id_returns:\n"
+        "    description: 'Returns for a customer'\n"
+    )
+    overrides, _ = load_overrides(str(overrides_path))
+    entries, report = capabilities_from_spec(_OPENAPI3, "orders_api", overrides)
+    assert entries[1]["description"] == "Returns for a customer"
+    assert not any("no summary/description" in w for w in report["warnings"])
+
+
+def test_override_for_unknown_id_is_a_warning_not_an_error(tmp_path):
+    from agent_api.capability_import.overrides import load_overrides
+
+    overrides_path = tmp_path / "overrides.yaml"
+    overrides_path.write_text(
+        "overrides:\n"
+        "  no_such_capability:\n"
+        "    description: 'Nowhere'\n"
+    )
+    overrides, _ = load_overrides(str(overrides_path))
+    entries, report = capabilities_from_spec(_OPENAPI3, "orders_api", overrides)
+    assert len(entries) == 2  # generation still proceeds
+    assert not report["errors"]
+    assert any(
+        "unknown capability id 'no_such_capability'" in w
+        for w in report["warnings"]
+    )
+
+
+def test_override_for_unknown_parameter_is_a_warning(tmp_path):
+    from agent_api.capability_import.overrides import load_overrides
+
+    overrides_path = tmp_path / "overrides.yaml"
+    overrides_path.write_text(
+        "overrides:\n"
+        "  get_customer_by_id:\n"
+        "    parameters:\n"
+        "      no_such_param: 'Nowhere'\n"
+    )
+    overrides, _ = load_overrides(str(overrides_path))
+    entries, report = capabilities_from_spec(_OPENAPI3, "orders_api", overrides)
+    assert entries[0]["description"] == "Look up a customer by ID"
+    assert any(
+        "unknown parameter 'no_such_param'" in w for w in report["warnings"]
+    )
+
+
+def test_load_overrides_rejects_bad_files(tmp_path):
+    from agent_api.capability_import.overrides import (
+        OverridesLoadError,
+        load_overrides,
+    )
+
+    missing = tmp_path / "missing.yaml"
+    with pytest.raises(OverridesLoadError):
+        load_overrides(str(missing))
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("capabilities: []\n")
+    with pytest.raises(OverridesLoadError, match="no 'overrides' mapping"):
+        load_overrides(str(bad))
+    bad.write_text("overrides:\n  get_x:\n    description: 42\n")
+    with pytest.raises(OverridesLoadError, match="non-empty string"):
+        load_overrides(str(bad))
+    bad.write_text("overrides:\n  get_x: 'not a mapping'\n")
+    with pytest.raises(OverridesLoadError, match="not a mapping"):
+        load_overrides(str(bad))
+
+
+def test_cli_overrides_flag_applies_and_reports_unknown_id(tmp_path, capsys):
+    spec_path, overrides_path = _write_spec_and_overrides(tmp_path)
+    out = tmp_path / "draft.yaml"
+    rc = main(["--from", "swagger", "--spec", str(spec_path),
+               "--connection", "orders_api", "--out", str(out),
+               "--overrides", str(overrides_path)])
+    assert rc == 0
+    draft = yaml.safe_load(out.read_text())
+    assert draft["capabilities"][0]["description"] == (
+        "Returns for all accounts of a customer"
+    )
+
+    # Unknown id: warning on stderr, exit still 0, draft still written.
+    overrides_path.write_text(
+        _OVERRIDES_TEXT
+        + "  no_such_capability:\n    description: 'Nowhere'\n"
+    )
+    rc = main(["--from", "swagger", "--spec", str(spec_path),
+               "--connection", "orders_api", "--out", str(out),
+               "--overrides", str(overrides_path)])
+    assert rc == 0
+    assert "unknown capability id 'no_such_capability'" in capsys.readouterr().err
+
+
+def test_cli_overrides_rerun_is_byte_identical_and_file_untouched(tmp_path):
+    spec_path, overrides_path = _write_spec_and_overrides(tmp_path)
+    before = overrides_path.read_bytes()
+    out1, out2 = tmp_path / "draft1.yaml", tmp_path / "draft2.yaml"
+    args = ["--from", "swagger", "--spec", str(spec_path),
+            "--connection", "orders_api", "--overrides", str(overrides_path)]
+    assert main([*args, "--out", str(out1)]) == 0
+    assert main([*args, "--out", str(out2)]) == 0
+    assert out1.read_bytes() == out2.read_bytes()
+    assert b"Returns for all accounts of a customer" in out1.read_bytes()
+    # The generator never modifies the overrides file.
+    assert overrides_path.read_bytes() == before
+
+
+def test_cli_overrides_missing_file_exits_2_and_writes_nothing(tmp_path):
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(_OPENAPI3))
+    out = tmp_path / "draft.yaml"
+    rc = main(["--from", "swagger", "--spec", str(spec_path),
+               "--connection", "orders_api", "--out", str(out),
+               "--overrides", str(tmp_path / "nope.yaml")])
+    assert rc == 2
+    assert not out.exists()
+
+
+def test_cli_overrides_rejected_in_entries_mode(tmp_path):
+    with pytest.raises(SystemExit) as exc:
+        main(["--entries", "draft.yaml", "--spec", "spec.json",
+              "--questions", "q.yaml", "--overrides", "o.yaml"])
+    assert exc.value.code == 2

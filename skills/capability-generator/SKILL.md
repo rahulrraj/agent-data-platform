@@ -14,6 +14,24 @@ Generate draft data-capability YAML from a Swagger/OpenAPI spec instead of hand-
 - A malformed spec never crashes the generator: a broken operation is dropped with a report error (exit 2, nothing written) while the rest still generates. Cyclic or missing `$ref`s, composed response schemas (`allOf`/`oneOf`/`anyOf`), deprecated operations, auth requirements, and envelope responses are all reported as errors or warnings — read the report, don't just take the file.
 - Table-based generation (`--from snowflake`) is planned, not built.
 
+## Override poor spec descriptions (deterministic re-runs)
+
+- Re-running generation from the spec discards hand edits to the draft — that is the known flaw, not a workflow to work around by editing the draft and never re-running. If the Swagger description is poor, write the better text once in a separate overrides file and pass it on every run: `python -m agent_api.capability_import --from swagger --spec <spec-file> --connection <name> --out draft.yaml --overrides overrides.yaml`.
+- Format — YAML, keyed by generated capability id (from `operationId`, snake_cased; the id is printed in the draft, so copy it from there):
+
+  ```yaml
+  overrides:
+    get_customer_by_id:
+      description: "Returns for all accounts of a customer"
+      parameters:
+        customer_id: "Customer ID, e.g. C-123"
+  ```
+
+  A capability `description` replaces the spec's summary/description wholesale, including a generated `GET /path` placeholder. A `parameters` entry replaces that parameter's spec description. Only descriptions are overridden — never ids, paths, types, or `required`.
+- The overrides file is a reviewed input, like the entries file: a human writes it, the generator only reads it and **never writes to it**. Re-running the import with no spec or override change produces byte-identical YAML, with the override applied every time.
+- An override naming an id no generated capability carries is a **warning**, not an error: generation still proceeds and the report names the id — read it, it is usually a typo or an operation the spec dropped. Same for an override naming a parameter the capability does not have. A malformed overrides file (unreadable, invalid YAML, wrong shape, non-string description) is an error: exit 2, nothing written.
+- `--overrides` is a generate-mode flag only. It does not apply to `--entries` mode (entries already carry the reviewed descriptions) or `--test-run` mode (which reads the registry directly).
+
 ## Review the draft (required)
 
 - Never merge the draft unedited. The generator does not touch `registry/capabilities.yaml` itself.
@@ -23,7 +41,7 @@ Generate draft data-capability YAML from a Swagger/OpenAPI spec instead of hand-
 - Add `fields` to HTTP capabilities whose responses should be trimmed before entering the model's context. The generator fills `fields` from a declared 200-response object schema when one exists; check them (and add them where the spec has no schema) rather than trusting them blindly. An envelope warning means the response wraps a nested list — consider `list_paths` for it (see `doc/data-capabilities.md`).
 - Heed the generator's warnings: a warning about instruction-like phrasing means the spec text contains wording that would reach the model verbatim via discovery — rewrite that description before merging, never merge it as-is. A warning about auth means the operation needs a credential the connection must carry — confirm it before merging. A deprecated warning means the operation is deprecated in the spec — decide deliberately, don't merge it by inertia.
 - Confirm `connection` names a key in `DATA_CONNECTIONS`. Secrets stay in the environment, never in YAML.
-- If review rewrote descriptions substantially, regenerate the question file from the reviewed draft — not from the spec, which would discard the review edits: `python -m agent_api.capability_import --entries draft.yaml --spec <spec-file> --questions questions.yaml`.
+- If review rewrote descriptions substantially, regenerate the question file from the reviewed draft — not from the spec, which would discard the review edits: `python -m agent_api.capability_import --entries draft.yaml --spec <spec-file> --questions questions.yaml`. For a description you expect to survive future re-runs from the spec, put it in the overrides file instead (see above) — the draft edit alone is lost on the next generation.
 
 ## Test the draft (required, before merging)
 
