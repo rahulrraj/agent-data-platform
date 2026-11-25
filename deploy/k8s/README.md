@@ -18,15 +18,16 @@ kustomization, including two things you usually do NOT want:
   old tracked version got the well-known default password
   `agent:agent`. Create the real Secret via §3 instead.
 - **`postgres-statefulset.yaml` — in-cluster Postgres.** The
-  Terraform EKS workflow deliberately SKIPS this file (RDS from the
-  postgres module is the conversation store) and creates the Secret
+  Terraform EKS workflow deliberately SKIPS this file (an existing
+  Postgres, supplied to the app-only EKS stack as its `postgres_dsn`
+  input, is the conversation store) and creates the Secret
   from Terraform outputs instead. If you `apply -k` on a
   Terraform-managed cluster, you get a second, empty Postgres that
   nothing should point at — and a Secret that points at it.
 
 For a Terraform-managed cluster, use the selective apply in
-`deploy/terraform/README.md` (namespace → Secret → configmap →
-Deployments → Ingress), never the bare `-k`. The bare `-k` is only
+`deploy/terraform/README.md` (namespace → ServiceAccount → Secret →
+configmap → Deployments → Ingress), never the bare `-k`. The bare `-k` is only
 for a standalone dev cluster that genuinely wants in-cluster Postgres.
 
 ## ⚠ TLS: this template serves plaintext HTTP
@@ -102,7 +103,12 @@ Postgres StatefulSet and the placeholder Secret.
   as-is the Ingress serves plaintext HTTP.
 - **AWS_REGION**: `configmap.yaml` sets it (the deploy-eks workflow
   substitutes the real region). A region alone grants no Bedrock
-  access — pods need credentials via IRSA, a known follow-up.
+  access — pods assume the IRSA role via the `agent-api`
+  ServiceAccount (`serviceaccount.yaml`, annotated by the deploy
+  workflow with the Terraform stack's `irsa_role_arn` output; the
+  API Deployment sets `serviceAccountName: agent-api`). The
+  ServiceAccount must be applied before the Deployments, or the API
+  pods fail to start.
 - **Ports**: the UI container listens on 8080 (non-root
   nginx-unprivileged image); the Service maps 80 → 8080, so the
   Ingress is unchanged. The API container runs as UID 10001.

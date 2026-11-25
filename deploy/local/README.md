@@ -1,7 +1,7 @@
 # Run the stack locally in containers
 
 This is the container path of the local run guide — the other two ways
-(no containers, Kubernetes/kind) are in [`doc/run-locally.md`](../doc/run-locally.md).
+(no containers, Kubernetes/kind) are in [`doc/run-locally.md`](../../doc/run-locally.md).
 
 Three containers on one Docker network: the API, the UI (nginx serving
 the production build), and an nginx front door that routes `/api/*` to

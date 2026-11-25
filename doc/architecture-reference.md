@@ -226,9 +226,13 @@ later request to that session fails identically.
 there was no session-reset endpoint — one long conversation bricked
 its session with no recovery short of DB surgery.
 
-- [ ] Enforce a history cap in the service layer (last N turns — here:
-      a 40-turn gateway cap — or a token budget, dropping oldest
-      non-system turns) *before* handing history to the gateway.
+- [ ] Bound the history handed to the gateway in the service layer —
+      here: a relevance-selected window (top 2 most relevant past
+      exchanges + the immediately preceding one, at most 3 exchanges;
+      40 turns is only an absolute ceiling), or a token budget,
+      dropping oldest non-system turns — *before* handing history to
+      the gateway. The stored conversation is kept whole; selection
+      is a handoff window, not deletion.
 - [ ] Provide a session-reset operation from the start; test that a
       conversation with N+1 turns delivers ≤N turns to the gateway.
 - [ ] Set explicit timeouts on every model construction (match the

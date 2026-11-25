@@ -157,6 +157,7 @@ kubectl -n agent-platform create secret tls agent-platform-tls \
 kubectl apply -f deploy/k8s/namespace.yaml
 kubectl apply -f deploy/k8s/configmap.yaml
 kubectl apply -f deploy/k8s/postgres-statefulset.yaml
+kubectl apply -f deploy/k8s/serviceaccount.yaml
 kubectl apply -f deploy/k8s/api-deployment.yaml
 kubectl apply -f deploy/k8s/ui-deployment.yaml
 kubectl apply -f deploy/k8s/ingress.yaml

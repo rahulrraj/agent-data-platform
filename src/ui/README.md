@@ -109,12 +109,16 @@ Running the image standalone with `VITE_API_URL` unset does not work:
   (`/api/ready`) calls carry no `session_id` — they are sessionless
   probes, not conversation calls.
 - **Local delete ≠ server delete.** Deleting a conversation here only
-  removes the local copy; there is no server history endpoint, so the
-  server keeps its copy under that `session_id` (orphaned, unreachable
-  from the UI since ids are never reused). Likewise, clearing localStorage
-  or restarting a memory-store server leaves the two sides diverged
-  with no warning: the UI may show old messages the server no longer
-  has context for, or vice versa.
+  removes the local copy; the server keeps its copy under that
+  `session_id`. The server side is no longer unreachable from the UI:
+  `GET /api/sessions` lists the caller's sessions, and once per login
+  the UI reconciles its local copy against that list — a local session
+  the server does not list is dropped from view (and, via the save
+  effect, from storage). Clearing localStorage still loses the local
+  view (the reconcile only drops, it never pulls server history back
+  into the browser), and restarting a memory-store server still leaves
+  the local copies diverged until the next login's reconcile drops
+  them — with no warning either way.
 - Deferred (not implementable from the UI alone): warning when a locally
   restored session predates the current server process. No existing
   endpoint reveals server start time or process identity —

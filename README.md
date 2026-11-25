@@ -7,25 +7,51 @@ SQL Server, REST APIs) discovered at runtime. Switch the agent framework
 service never knows which is running. The agent answers questions with tools,
 including organization data discovered by meaning from the capability registry.
 
+Read it straight through like a book: what the system is, how it is
+put together, how to run it, how to build on it, how to deploy it —
+with the reference material at the end. The full index is
+[`doc/README.md`](doc/README.md).
+
 ## Contents
+
+*Part 1 — What the system is*
 
 - [System overview](#system-overview)
 - [How a question is answered](#how-a-question-is-answered)
 - [How data capabilities are discovered and run](#how-data-capabilities-are-discovered-and-run)
+
+*Part 2 — Orientation / architecture*
+
 - [Layers and dependency rules](#layers-and-dependency-rules)
 - [Switching framework and model](#switching-framework-and-model)
 - [Resilience](#resilience)
-- [Observability (OTLP tracing and metrics, ADR 0009)](#observability-otlp-tracing-and-metrics-adr-0009)
+
+*Part 3 — Running it locally*
+
 - [Run it](#run-it)
 - [Run with Docker (local containers)](#run-with-docker-local-containers)
 - [Web UI](#web-ui)
+
+*Part 4 — Building on it*
+
+- [Observability (OTLP tracing and metrics, ADR 0009)](#observability-otlp-tracing-and-metrics-adr-0009)
+- [Evals](#evals)
+
+*Part 5 — Deploying it*
+
 - [Deploy on Kubernetes](#deploy-on-kubernetes)
 - [Run on AWS Lambda](#run-on-aws-lambda)
+- [Pipelines](#pipelines)
+
+*Part 6 — Reference*
+
 - [Configure](#configure)
 - [API](#api)
 - [Project map](#project-map)
 - [Docs](#docs)
 - [Principles in one line each](#principles-in-one-line-each)
+
+**Part 1 — What the system is.**
 
 ## System overview
 
@@ -82,6 +108,21 @@ sequenceDiagram
 
 `/api/chat` is the same flow, but the gateway streams `StreamChunk`s
 (text / tool / error) as Server-Sent Events instead of one reply.
+
+The gateway does not get the whole stored history: the handoff window
+is relevance-selected — the top 2 past exchanges most relevant to the
+current question, plus the immediately preceding exchange (at most 3
+exchanges; 40 turns is only an absolute ceiling), with a recency
+fallback to the last 2 exchanges when embeddings are unavailable
+(`src/agent_api/services/history_selection.py`). The stored conversation
+is kept whole — selection is a handoff window, not deletion.
+
+History is per user, not per browser: `GET /api/sessions` lists the
+authenticated caller's sessions (`{"sessions": [{"id",
+"updated_at"}]}`, 401 unauthenticated; dev mode lists all), and the UI
+fetches it after login and reconciles its localStorage copy against
+the server list. Sessions bind to the first writer's principal; a
+session owned by another user is a 403.
 
 ## How data capabilities are discovered and run
 
@@ -143,6 +184,8 @@ checklist (descriptions as user needs, example values, merge, test).
   query: "SELECT name, tier, region FROM dim_customers WHERE customer_id = %(customer_id)s"
 ```
 
+**Part 2 — Orientation / architecture.**
+
 ## Layers and dependency rules
 
 ```mermaid
@@ -203,6 +246,54 @@ field selects one (ADR 0007). The framework does not vary per request.
   adapter (`memory` default, `sqlite` for restart-proof single host,
   Postgres built for multi-instance).
 
+**Part 3 — Running it locally.**
+
+## Run it
+
+```bash
+pip install -e ".[dev]"
+python -m agent_api.main
+curl -X POST localhost:8000/api/ask \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "What is 6 * 7? Use the calculate tool.", "session_id": "demo"}'
+```
+
+## Run with Docker (local containers)
+
+Three containers on one Docker network — API, UI, and an nginx front
+door — with Okta login working end to end:
+
+```bash
+export AWS_PROFILE=<your SSO profile>
+export AUTH_ISSUER=https://<tenant>.oktapreview.com/oauth2/<auth-server-id>
+export AUTH_AUDIENCE=api://<your api audience>
+export VITE_OIDC_ISSUER="$AUTH_ISSUER"
+export VITE_OIDC_CLIENT_ID=<the Okta SPA app's client id>
+
+deploy/local/run.sh build
+deploy/local/run.sh up      # UI at http://localhost:8501
+deploy/local/run.sh down
+```
+
+Full settings, notes, and what the local run does and does not prove:
+[`deploy/local/README.md`](deploy/local/README.md). For the other ways
+to run locally — no containers, or Kubernetes (kind) — see
+[`doc/run-locally.md`](doc/run-locally.md).
+
+## Web UI
+
+React chat frontend in `src/ui/` — ChatGPT-style layout, Claude-style warmth,
+Gemini-style accents. Streams replies token-by-token over `/api/chat`.
+
+```bash
+cd src/ui && npm install && npm run dev    # http://localhost:5173
+```
+
+`/api/*` is proxied to the API in dev; set `VITE_API_URL` for a deployed
+build. See `src/ui/README.md`.
+
+**Part 4 — Building on it.**
+
 ## Observability (OTLP tracing and metrics, ADR 0009)
 
 Tracing is OpenTelemetry, Strands-native: framework spans
@@ -249,49 +340,16 @@ invocation, so spans survive freeze/thaw; elsewhere the standard
 batch processor is used. `/api/health` and `/api/ready` are excluded
 from tracing.
 
-## Run it
+## Evals
 
-```bash
-pip install -e ".[dev]"
-python -m agent_api.main
-curl -X POST localhost:8000/api/ask \
-  -H 'Content-Type: application/json' \
-  -d '{"message": "What is 6 * 7? Use the calculate tool.", "session_id": "demo"}'
-```
+The recorded eval set (`doc/evals.md`) is the fixed behavior check for
+the Evaluate stage: golden cases that pin how the agent's capability
+tools behave, run offline with `python -m agent_api.evals` — green or
+red, in seconds, no model, no network. A behavior change (prompt, tool,
+model, framework, threshold, trimming rule) runs this set before it
+ships. Never edit a case to make it pass: fix the code.
 
-## Run with Docker (local containers)
-
-Three containers on one Docker network — API, UI, and an nginx front
-door — with Okta login working end to end:
-
-```bash
-export AWS_PROFILE=<your SSO profile>
-export AUTH_ISSUER=https://<tenant>.oktapreview.com/oauth2/<auth-server-id>
-export AUTH_AUDIENCE=api://<your api audience>
-export VITE_OIDC_ISSUER="$AUTH_ISSUER"
-export VITE_OIDC_CLIENT_ID=<the Okta SPA app's client id>
-
-deploy/local/run.sh build
-deploy/local/run.sh up      # UI at http://localhost:8501
-deploy/local/run.sh down
-```
-
-Full settings, notes, and what the local run does and does not prove:
-[`deploy/local/README.md`](deploy/local/README.md). For the other ways
-to run locally — no containers, or Kubernetes (kind) — see
-[`doc/run-locally.md`](doc/run-locally.md).
-
-## Web UI
-
-React chat frontend in `src/ui/` — ChatGPT-style layout, Claude-style warmth,
-Gemini-style accents. Streams replies token-by-token over `/api/chat`.
-
-```bash
-cd src/ui && npm install && npm run dev    # http://localhost:5173
-```
-
-`/api/*` is proxied to the API in dev; set `VITE_API_URL` for a deployed
-build. See `src/ui/README.md`.
+**Part 5 — Deploying it.**
 
 ## Deploy on Kubernetes
 
@@ -300,6 +358,17 @@ Two Deployments (API + nginx-served UI), one Ingress (`/api/*` → API),
 ConfigMap + Secret for env, and a Postgres StatefulSet for the
 conversation store (swap for a managed database in prod). The API image is
 built from the repo-root `Dockerfile`; the UI image from `src/ui/Dockerfile`.
+
+On EKS the Terraform stack is app-only: the cluster, VPC/subnets, and
+Postgres already exist outside the stack — it takes the existing
+cluster's name (`EKS_CLUSTER_NAME`) and an existing Postgres DSN
+(`TF_VAR_postgres_dsn`) as inputs and creates only the ECR repos, the
+cluster's OIDC provider, and an IRSA role for the API pods
+(`deploy/k8s/serviceaccount.yaml`, annotated by the deploy workflow
+with the role ARN; the API Deployment runs as that ServiceAccount).
+See `deploy/terraform/README.md` — including the state-migration
+hazard if you are upgrading a stack that used to provision the
+cluster itself.
 
 ## Run on AWS Lambda
 
@@ -365,6 +434,25 @@ Streaming facts, stated plainly:
   first discovery. A shared cache (e.g. ElastiCache/Redis) is the
   follow-up; it is not built here.
 
+## Pipelines
+
+Deploys run from CI, never from a laptop: GitHub Actions
+(`.github/workflows/deploy-lambda.yml` and `deploy-eks.yml`, plan →
+review → apply, no bare `-auto-approve`) and a GitLab CI mirror
+(`.gitlab-ci.yml`: tests with no AWS, build + push to ECR, deploy
+placeholder disabled with `rules: when: never`).
+
+Both pipelines use OIDC, never static AWS keys. Full setup — the OIDC
+identity provider and role trust policies, the repo variables and
+secrets, the deploy gates, and what the GitLab mirror needs before its
+build stage can run — lives in
+[`deploy/terraform/README.md`](deploy/terraform/README.md) (§ GitHub
+Actions + OIDC and § GitLab CI). The GitLab pipeline has not run on a
+real GitLab runner yet; its `sub`-claim format is GitLab's documented
+default, unconfirmed against a real minted token.
+
+**Part 6 — Reference.**
+
 ## Configure
 
 | Variable               | Default                  | Purpose                                              |
@@ -426,6 +514,8 @@ configs — secrets live here, never in the YAML:
 | GET    | /api/ready   | `{"status": "ready"}` or 503 `{"status": "not_ready", ...}`         |
 | POST   | /api/ask     | `{message, session_id, model?}` → `{reply, tools_used, session_id}` — `model` is an `ALLOWED_MODELS` key (ADR 0007); absent means the configured model. Requires `Authorization: Bearer <token>` when auth is on (ADR 0008) |
 | POST   | /api/chat    | Streams the reply as Server-Sent Events (text/tool/error chunks); same optional `model` field as `/api/ask`; same bearer requirement, validated before the stream starts |
+| GET    | /api/sessions | `{"sessions": [{"id", "updated_at"}]}` — the authenticated caller's sessions only (401 unauthenticated; dev mode lists all). The UI fetches it after login and reconciles its localStorage copy |
+| DELETE | /api/sessions/{session_id} | Clears a session's history (fresh start for a bricked session); a session owned by another user is a 403 |
 
 Errors: invalid input (including an unknown `model` key) → 400; missing/invalid/expired token → 401; a session owned by another user → 403; auth infrastructure unreachable → 503; model/data failure → 502 with a clean message.
 
@@ -465,20 +555,23 @@ doc/
 ## Docs
 
 Full index: [`doc/README.md`](doc/README.md). Every document carries its
-own `Contents` section at the top.
+own `Contents` section at the top. In book order:
 
 | Doc | What it is |
 | --- | ---------- |
-| `doc/hexagonal-architecture.md` | Structure rules: layers, ports, dependency directions (from the original Drive doc) |
-| `doc/platform-principles.md` | Platform qualities: cloud-agnostic, resilient, multi-runtime, model-agnostic + conformance checklist |
-| `doc/architecture-reference.md` | Checklist distilled from building this platform, for the next project |
-| `doc/data-capabilities.md` | Registry format, discovery/execution flow, guardrails, access model |
-| `doc/agent-lifecycle.md` | ADLC: stages, gates, and the ship checklist |
-| `doc/evals.md` | Recorded eval set: golden capability-behavior cases, run offline with `python -m agent_api.evals` |
-| `doc/guardrails.md` | Guardrail catalog — enforced vs. planned, honestly marked |
-| `doc/approvals.md` | Approval matrix, what counts as approval, emergency path |
-| `doc/developer-guide.md` | Working notes: layout, conventions, operations, sandbox quirks |
-| `doc/adr/` | Decision records: 0001 tools folder · 0002 capability registry · 0003 dual frameworks · 0004 no composites · 0005 proxy strip · 0006 shared executor base · 0007 dynamic model selection · 0008 authentication · 0009 OTLP observability · 0010 LangGraph OTel detail |
+| `doc/hexagonal-architecture.md` | Part 2 — Structure rules: layers, ports, dependency directions (from the original Drive doc) |
+| `doc/platform-principles.md` | Part 2 — Platform qualities: cloud-agnostic, resilient, multi-runtime, model-agnostic + conformance checklist |
+| `doc/architecture-reference.md` | Part 2 — Checklist distilled from building this platform, for the next project |
+| `doc/run-locally.md` | Part 3 — Run it locally, three ways: no containers, containers, Kubernetes (kind) |
+| `doc/data-capabilities.md` | Part 4 — Registry format, discovery/execution flow, guardrails, access model |
+| `doc/evals.md` | Part 4 — Recorded eval set: golden capability-behavior cases, run offline with `python -m agent_api.evals` |
+| `doc/developer-guide.md` | Part 4 — Contributor handbook: layout, conventions, operations, sandbox quirks |
+| `deploy/k8s/README.md` | Part 5 — Kubernetes manifests: any cloud, selective apply, TLS warning |
+| `deploy/terraform/README.md` | Part 5 — Terraform stacks (Lambda + app-only EKS), state backend, pipelines/OIDC, GitLab CI, first deployment, known follow-ups |
+| `doc/agent-lifecycle.md` | Part 6 — ADLC: stages, gates, and the ship checklist |
+| `doc/guardrails.md` | Part 6 — Guardrail catalog — enforced vs. planned, honestly marked |
+| `doc/approvals.md` | Part 6 — Approval matrix, what counts as approval, emergency path |
+| `doc/adr/` | Part 6 — Decision records: 0001 tools folder · 0002 capability registry · 0003 dual frameworks · 0004 no composites · 0005 proxy strip · 0006 shared executor base · 0007 dynamic model selection · 0008 authentication · 0009 OTLP observability · 0010 LangGraph OTel detail |
 
 ## Principles in one line each
 
