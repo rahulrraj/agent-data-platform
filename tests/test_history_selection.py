@@ -52,6 +52,17 @@ class ShortEmbeddingGateway(TopicEmbeddingGateway):
         return [[1.0, 0.0, 0.0]]  # one vector, regardless of input count
 
 
+class CountingEmbeddingGateway(TopicEmbeddingGateway):
+    """Counts embed calls; delegates the vectors to the topic fake."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def embed(self, texts):
+        self.calls += 1
+        return super().embed(texts)
+
+
 def _exchange(user_text, assistant_text, tool_results=()):
     turns = [Turn(role=USER, content=user_text)]
     turns.append(
@@ -237,3 +248,27 @@ def test_current_message_is_never_in_the_selection():
     assert "What is the capital of France again?" not in [
         t.content for t in selection.turns
     ]
+
+
+def test_recency_mode_never_calls_embeddings():
+    """Recency mode is the current default: even with a working
+    gateway, no embedding call happens — relevance is on hold."""
+    gateway = CountingEmbeddingGateway()
+    selection = select_history_turns(
+        _history(), "What is the capital of France again?", gateway, mode="recency"
+    )
+    assert gateway.calls == 0
+    assert selection.fallback_used
+    assert "recency mode" in selection.reason
+    # Last 2 exchanges (invoice + weather), chronological.
+    assert [t.content for t in selection.turns] == [
+        "Show me invoice 1042",
+        "Invoice 1042 totals $1,200.",
+        "What is the weather in Boston?",
+        "Boston is 72F and sunny.",
+    ]
+
+
+def test_invalid_mode_raises():
+    with pytest.raises(ValueError, match="history selection mode"):
+        select_history_turns(_history(), "anything", None, mode="random")

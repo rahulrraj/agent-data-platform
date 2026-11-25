@@ -109,14 +109,28 @@ can move.
   faked-psycopg tested) — see the live-test item below.
 
 - Relevance-based history window (2026-11-25): new
-  `services/history_selection.py` — the gateway handoff is now
-  the top 2 most relevant past exchanges + the immediately
-  preceding one (≤ 3 exchanges), ranked by embedding similarity
-  to the current question; 40 turns is only an absolute ceiling;
-  recency fallback (last 2 exchanges) when embeddings are
-  unavailable or fail, recorded in the result + log. Wired into
-  `ask_agent._gateway_conversation` for both `ask()` and
-  `ask_stream()`. 11 new tests; suite numbers as above.
+  `services/history_selection.py` — ranking by embedding similarity
+  (top 2 most relevant past exchanges + the immediately preceding
+  one, ≤ 3 exchanges; 40 turns only an absolute ceiling; recency
+  fallback when embeddings are unavailable or fail, recorded in the
+  result + log). Wired into `ask_agent._gateway_conversation` for
+  both `ask()` and `ask_stream()`. 13 selection tests + 3 service
+  tests; suite numbers as above.
+  **ON HOLD (Rahul, 2026-11-25):** the service now defaults to
+  recency — the last 2 exchanges, no embedding call at all
+  (`HISTORY_SELECTION_MODE`, default `recency`; `AskAgentService`
+  takes `history_selection_mode`, default `"recency"`). The
+  relevance code stays behind `mode="relevance"` for the separate
+  PR below; docs corrected to recency.
+
+- Separate PR (deferred, Rahul 2026-11-25): relevance history
+  selection + stored turn vectors. The current relevance path
+  re-embeds every stored exchange on every turn and the vectors
+  live nowhere — wasted work. The PR should embed each turn once
+  (vector column / pgvector or a cache keyed by turn, invalidated
+  on edit), rank against stored vectors, and flip the default to
+  `HISTORY_SELECTION_MODE=relevance`. Keep the recency fallback
+  for embedding failures.
 
 - EKS stack is app-only (2026-11-25): `stacks/aws-eks` no longer
   provisions the cluster, node groups, addons, VPC/subnets, or
@@ -152,8 +166,9 @@ can move.
   now describe the app-only EKS stack (existing cluster +
   Postgres as inputs; creates ECR, OIDC provider, IRSA role)
   including the state-migration hazard and the GitLab CI setup;
-  per-user history (`GET /api/sessions`) and the relevance-based
-  history window corrected wherever docs stated the old behavior;
+  per-user history (`GET /api/sessions`) and the history window
+  (recency now; relevance on hold) corrected wherever docs stated
+  the old behavior;
   k8s README + run-locally step 5 gain `serviceaccount.yaml`
   before `api-deployment.yaml`; `src/ui` README history section
   corrected. Anchor check over all 295 doc links: 0 broken (one

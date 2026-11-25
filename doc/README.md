@@ -18,7 +18,7 @@ is the map for the rest.
 
 | Document | What it is |
 | --- | --- |
-| [`../README.md`](../README.md) | Platform overview: system and sequence diagrams, how a question is answered (including the relevance-selected history window and per-user sessions), capability discovery, layers, switching framework/model, resilience, observability, running, deploying, API, project map |
+| [`../README.md`](../README.md) | Platform overview: system and sequence diagrams, how a question is answered (including the recency history window and per-user sessions), capability discovery, layers, switching framework/model, resilience, observability, running, deploying, API, project map |
 | [`../AGENTS.md`](../AGENTS.md) | Mandatory working rules for this codebase + pointers to detail |
 | [`../TODO.md`](../TODO.md) | Living list: follow-ups, planned gaps, blocked verifications — review before implementing anything |
 

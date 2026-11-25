@@ -110,12 +110,14 @@ sequenceDiagram
 (text / tool / error) as Server-Sent Events instead of one reply.
 
 The gateway does not get the whole stored history: the handoff window
-is relevance-selected — the top 2 past exchanges most relevant to the
-current question, plus the immediately preceding exchange (at most 3
-exchanges; 40 turns is only an absolute ceiling), with a recency
-fallback to the last 2 exchanges when embeddings are unavailable
-(`src/agent_api/services/history_selection.py`). The stored conversation
-is kept whole — selection is a handoff window, not deletion.
+is the last 2 exchanges (recency). Relevance selection by embedding —
+the top 2 most relevant past exchanges plus the immediately preceding
+one — is implemented in `src/agent_api/services/history_selection.py`
+but on hold: it re-embeds every stored exchange on every turn, and
+the vectors are not stored anywhere. It is a separate PR, enabled
+with `HISTORY_SELECTION_MODE=relevance` once turn vectors are stored.
+40 turns is only an absolute ceiling. The stored conversation is kept
+whole — selection is a handoff window, not deletion.
 
 History is per user, not per browser: `GET /api/sessions` lists the
 authenticated caller's sessions (`{"sessions": [{"id",

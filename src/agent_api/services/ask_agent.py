@@ -18,12 +18,13 @@ so memory/sqlite/postgres behave identically):
   The lock is polled non-blockingly in the streaming path so waiting
   never blocks the event loop.
 - The gateway never sees more than MAX_HISTORY_TURNS turns: history is
-  selected by relevance at handoff (see history_selection.py — the
-  most relevant past exchanges plus the immediately preceding one),
-  falling back to recency when embeddings are unavailable. The stored
-  conversation is kept whole — selection is a handoff window, not
-  deletion — so an over-long session cannot brick itself against the
-  model context window.
+  selected at handoff (see history_selection.py). The current default
+  is recency — the last 2 exchanges — because relevance selection is
+  on hold (Rahul, 2026-11-25: embedding every stored exchange on
+  every turn is wasted work; relevance + stored turn vectors is a
+  separate PR). The stored conversation is kept whole — selection is
+  a handoff window, not deletion — so an over-long session cannot
+  brick itself against the model context window.
   `reset_session()` clears a session outright when a caller wants a
   fresh start.
 """
@@ -61,9 +62,8 @@ from agent_api.ports.model_gateway import (
 from agent_api.services.history_selection import select_history_turns
 
 # Absolute ceiling on the gateway handoff window (see
-# history_selection.py); selection normally sends at most 3 exchanges
-# (2 most relevant + the immediately preceding one). Stored history is
-# NOT truncated — see module docstring.
+# history_selection.py); recency selection sends the last 2 exchanges.
+# Stored history is NOT truncated — see module docstring.
 MAX_HISTORY_TURNS = 40
 
 # One span per turn (ADR 0009), named from our own vocabulary so alerts
@@ -122,6 +122,7 @@ class AskAgentService:
         embedding_gateway: EmbeddingGateway | None = None,
         capability_registry: CapabilityRepository | None = None,
         gateway_resolver: ModelGatewayResolver | None = None,
+        history_selection_mode: str = "recency",
     ) -> None:
         if gateway is None and gateway_resolver is None:
             raise TypeError(
@@ -129,11 +130,17 @@ class AskAgentService:
             )
         if conversations is None:
             raise TypeError("AskAgentService needs a conversations repository")
+        if history_selection_mode not in ("recency", "relevance"):
+            raise ValueError(
+                "history_selection_mode must be 'recency' or 'relevance', "
+                f"got {history_selection_mode!r}"
+            )
         self._gateway = gateway
         self._gateway_resolver = gateway_resolver
         self._conversations = conversations
         self._embedding_gateway = embedding_gateway
         self._capability_registry = capability_registry
+        self._history_selection_mode = history_selection_mode
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
 
@@ -253,18 +260,21 @@ class AskAgentService:
     def _gateway_conversation(
         self, conversation: Conversation, message: str
     ) -> Conversation:
-        """The handoff window: relevance-selected history + current turn.
+        """The handoff window: recency-selected history + current turn.
 
         The stored conversation is kept whole — selection is a handoff
         window, not deletion. History turns are the stored turns before
         the current user message; the current turn is always appended
         last, so the gateway always sees the question it must answer.
-        Selection falls back to recency internally and never raises.
+        Recency is the default (relevance selection is on hold — see
+        history_selection.py); the mode comes from the constructor and
+        is set by HISTORY_SELECTION_MODE in the composed app.
         """
         selection = select_history_turns(
             conversation.turns[:-1],
             message,
             self._embedding_gateway,
+            mode=self._history_selection_mode,
             max_turns=MAX_HISTORY_TURNS,
         )
         return Conversation(

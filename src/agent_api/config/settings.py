@@ -176,6 +176,10 @@ class Settings:
         # per request
     auth_disabled: bool  # AUTH_DISABLED == "true" only: explicit dev
         # opt-out; otherwise startup is fail-closed (see _parse_auth)
+    history_selection_mode: str = "recency"  # HISTORY_SELECTION_MODE:
+        # "recency" (default — the last 2 exchanges) or "relevance"
+        # (embedding ranking; on hold, see history_selection.py — the
+        # separate PR enables it once turn vectors are stored)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -209,6 +213,14 @@ class Settings:
             os.environ.get("AUTH_JWKS_URL", ""),
             os.environ.get("AUTH_DISABLED", ""),
         )
+        history_selection_mode = os.environ.get(
+            "HISTORY_SELECTION_MODE", "recency"
+        ).strip().lower()
+        if history_selection_mode not in ("recency", "relevance"):
+            raise ValueError(
+                "HISTORY_SELECTION_MODE must be 'recency' or 'relevance', "
+                f"got {history_selection_mode!r}"
+            )
         return cls(
             provider=provider,
             framework=framework,
@@ -258,6 +270,7 @@ class Settings:
             auth_audience=auth_audience,
             auth_jwks_url=auth_jwks_url,
             auth_disabled=auth_disabled,
+            history_selection_mode=history_selection_mode,
         )
 
     def describe_model(self) -> str:

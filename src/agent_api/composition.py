@@ -387,6 +387,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         gateway_resolver=factory,
         embedding_gateway=deps.embedding_gateway,
         capability_registry=deps.capability_registry,
+        history_selection_mode=settings.history_selection_mode,
     )
     app = create_app(
         service, model_label=model_label(settings),

@@ -57,10 +57,27 @@ class FakeRepository:
         return None
 
 
+class CountingEmbeddingGateway:
+    """Embeddings that count calls; zero vectors, so nothing clears
+    the relevance threshold — the tests only care whether embed ran."""
+
+    similarity_threshold = 0.60
+
+    def __init__(self):
+        self.calls = 0
+
+    def embed(self, texts):
+        self.calls += 1
+        return [[0.0, 0.0, 0.0] for _ in texts]
+
+    def ping(self) -> None:
+        return None
+
+
 def make_service(**kwargs) -> tuple[AskAgentService, FakeGateway, FakeRepository]:
     gateway = kwargs.pop("gateway", FakeGateway())
     repo = kwargs.pop("repo", FakeRepository())
-    return AskAgentService(gateway=gateway, conversations=repo), gateway, repo
+    return AskAgentService(gateway=gateway, conversations=repo, **kwargs), gateway, repo
 
 
 def test_ask_returns_reply_and_tools():
@@ -514,3 +531,29 @@ def test_stream_tool_chunks_deduped_by_name():
     chunks = asyncio.run(_collect(service))
     tool_chunks = [c.payload for c in chunks if c.kind == "tool"]
     assert tool_chunks == ["calculate", "word_count"]
+
+def test_default_history_selection_is_recency_even_with_embedding_gateway():
+    """The service default is recency: an injected embedding gateway
+    is never called for history selection (relevance is on hold)."""
+    gateway = CountingEmbeddingGateway()
+    service, _, _ = make_service(embedding_gateway=gateway)
+    service.ask("s1", "first question")
+    service.ask("s1", "second question")
+    assert gateway.calls == 0
+
+
+def test_relevance_mode_calls_embeddings_for_history():
+    """Opting into relevance mode restores the embedding ranking:
+    the second turn embeds the stored exchange."""
+    gateway = CountingEmbeddingGateway()
+    service, _, _ = make_service(
+        embedding_gateway=gateway, history_selection_mode="relevance"
+    )
+    service.ask("s1", "first question")
+    service.ask("s1", "second question")
+    assert gateway.calls > 0
+
+
+def test_invalid_history_selection_mode_rejected():
+    with pytest.raises(ValueError, match="history_selection_mode"):
+        make_service(history_selection_mode="random")

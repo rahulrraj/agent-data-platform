@@ -1,5 +1,16 @@
 """Relevance-based history window for the gateway handoff.
 
+ON HOLD (Rahul, 2026-11-25): the relevance path below is implemented
+and tested, but the service defaults to recency — embedding every
+stored exchange on every turn is wasted work, and the vectors are not
+stored anywhere, so each turn re-embeds the whole history. Relevance
+selection (plus stored turn vectors, so a turn is embedded once) is a
+separate PR; see TODO.md. Until then the default is the recency
+fallback: the last 2 exchanges. Nothing here is deleted — the
+relevance code stays, behind `mode="relevance"`.
+
+Original design (applies when relevance is enabled):
+
 Replaces the old "last N turns, blindly" window (AskAgentService used
 to hand the gateway the last MAX_HISTORY_TURNS = 40 turns). Rahul's
 direction: 2-3 turns is more than enough, and relevance beats recency —
@@ -162,6 +173,7 @@ def select_history_turns(
     current_message: str,
     embedding_gateway: EmbeddingGateway | None = None,
     *,
+    mode: str = "relevance",
     max_relevant_pairs: int = DEFAULT_RELEVANT_PAIRS,
     max_turns: int = ABSOLUTE_MAX_HISTORY_TURNS,
 ) -> HistorySelection:
@@ -175,14 +187,26 @@ def select_history_turns(
     ``message``, then build the gateway conversation from the selected
     turns plus the final user turn.)
 
+    ``mode`` is ``"relevance"`` (rank by embedding similarity, top
+    ``max_relevant_pairs`` pairs above threshold plus the continuity
+    pair) or ``"recency"`` (last 2 exchanges, no embedding call at
+    all). The service defaults to recency — relevance is on hold
+    pending the stored-vectors PR (see module docstring) — so pass
+    ``mode`` explicitly when the caller wants relevance.
+
     Returns at most ``max_relevant_pairs`` relevant exchanges plus the
     immediately preceding exchange, in chronological order, and never
     more than ``max_turns`` turns. Never raises: any embedding problem
     degrades to the recency fallback.
     """
+    if mode not in ("relevance", "recency"):
+        raise ValueError(f"history selection mode must be 'relevance' or 'recency', got {mode!r}")
     exchanges = _group_exchanges(history_turns)
     if not exchanges:
         return HistorySelection(turns=[], fallback_used=False, reason="empty history")
+
+    if mode == "recency":
+        return _recency_fallback(exchanges, "recency mode: relevance selection on hold")
 
     if embedding_gateway is None:
         return _recency_fallback(exchanges, "no embedding gateway configured")
