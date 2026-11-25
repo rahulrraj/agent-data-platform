@@ -263,20 +263,16 @@ can move.
   picked — either a deploy step in the pipeline or a call to the
   per-platform deploy workflow.
 - **Push and merge** — remote `feature/initial-platform` tip is
-  `5df8fe0` (pushed 2026-11-25, verified — the 4-commit push to
-  `55a7c2c` plus the TODO push-state note). Local-only since then:
-  `376268c` (run guide: namespace before the Secret in the kind
-  path), `bbd3c72` (TODO note), `ddce188` (per-user history +
-  relevance-based history window), `2b8abb7` (EKS stack app-only),
-  `9eaf0cb` (GitLab CI), `dd48ecc` (TODO note), `999f77e` (TODO:
-  deferred External Secrets Operator), `2a75ddc` (capability
-  description overrides), `458774e` (TODO note), `e287bb7` (docs
-  reorganized into book form). Note: the push worked with the stored
-  credential, so the Nov 15 PAT-expiry warning is stale — the
-  credential is valid as of 2026-11-25. Push on Rahul's word via
-  the connector API script `~/workspace/gh_api_push.py` (git
-  HTTPS cannot use the vault credential). Merging the branch is
-  Rahul's later call.
+  `2d5e77f` (pushed 2026-11-25, verified — all 13 commits replayed
+  with identical SHAs: run guide namespace fix, TODO notes, per-user
+  history + relevance window, app-only EKS, GitLab CI, deferred
+  External Secrets Operator, capability description overrides, docs
+  book reorg, recency-by-default history, Bedrock Sonnet kind run).
+  Note: the push worked with the stored credential, so the Nov 15
+  PAT-expiry warning is stale — the credential is valid as of
+  2026-11-25. Push on Rahul's word via the connector API script
+  `~/workspace/gh_api_push.py` (git HTTPS cannot use the vault
+  credential). Merging the branch is Rahul's later call.
 
 ## Capabilities and guardrails
 
