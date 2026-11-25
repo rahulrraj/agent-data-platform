@@ -92,10 +92,65 @@ can move.
   (ci.yml already tests PRs, and a PR must not push images). Safe to
   merge before AWS is wired in: stage 1 runs without AWS, stage 2
   fails at the OIDC step until the role exists. YAML validated; never
-  run on GitHub yet (no push — PAT expired).
+  run on GitHub yet. Pushed 2026-11-25 (commit `55a7c2c`).
+
+- Per-user history (2026-11-25): `ConversationRepository`
+  gains `list_sessions(owner)` (port + in-memory/SQLite/Postgres;
+  Postgres filters in SQL on the `turns_json` owner envelope +
+  expression index, dev mode lists everything); `GET
+  /api/sessions` returns only the caller's sessions (401 when
+  unauthenticated); the UI stores the id_token `sub`, scopes its
+  localStorage copy by principal, and reconciles once per login
+  against the server list. Backend 568 passed / 4 skipped, eval
+  12/12, UI 109 passed. Known limitation: the reconcile runs once
+  right after login — a local session created in the split second
+  before the fetch resolves could be dropped (judged negligible).
+  Not verified against live Postgres (filter + index only
+  faked-psycopg tested) — see the live-test item below.
+
+- Relevance-based history window (2026-11-25): new
+  `services/history_selection.py` — the gateway handoff is now
+  the top 2 most relevant past exchanges + the immediately
+  preceding one (≤ 3 exchanges), ranked by embedding similarity
+  to the current question; 40 turns is only an absolute ceiling;
+  recency fallback (last 2 exchanges) when embeddings are
+  unavailable or fail, recorded in the result + log. Wired into
+  `ask_agent._gateway_conversation` for both `ask()` and
+  `ask_stream()`. 11 new tests; suite numbers as above.
+
+- EKS stack is app-only (2026-11-25): `stacks/aws-eks` no longer
+  provisions the cluster, node groups, addons, VPC/subnets, or
+  RDS — it takes an existing cluster (`cluster_name`) and an
+  existing Postgres (`postgres_dsn`, sensitive) as inputs and
+  creates only ECR repos, the cluster OIDC provider, and the IRSA
+  role for the API pods (trust-pinned to
+  `system:serviceaccount:agent-platform:agent-api`). New
+  `deploy/k8s/serviceaccount.yaml`; workflow reads
+  `EKS_CLUSTER_NAME` + `TF_VAR_postgres_dsn`. No shared module
+  deleted (aws-lambda still uses all of them). `terraform
+  validate` clean on both stacks. STATE HAZARD: old remote state
+  still holds the removed resources — `terraform state rm` them
+  before the first apply or it plans destruction of the cluster,
+  VPC, and RDS. Docs updated by the book-form reorg pass (item 4,
+  in progress).
+
+- GitLab CI (2026-11-25): `.gitlab-ci.yml` mirrors the GitHub
+  pipeline (tests with no AWS; build+push API/UI images to ECR
+  via GitLab OIDC `id_tokens` + `assume-role-with-web-identity`;
+  deploy placeholder `rules: when: never`). YAML validated;
+  NOT run on a real GitLab runner. Setup needed before stage 2
+  can run: `AWS_ROLE_TO_ASSUME` variable + OIDC provider for
+  `https://gitlab.com` and a trusting role (see the file's header
+  comments); the `sub` claim format is the documented default,
+  unconfirmed against a real token.
 
 ## Live tests and verification
 
+- **Per-user sessions list against live Postgres** — the
+  `turns_json->>'owner'` filter and expression index in
+  `PostgresConversationRepository.list_sessions` were verified
+  only via faked-psycopg tests. Run against real Postgres on the
+  first Lambda/staging deploy (list for two principals + dev mode).
 - **Bedrock live 3-hop test** — blocked: needs Rahul's AWS credentials in
   the test environment + Bedrock model access enabled for
   `us.anthropic.claude-sonnet-5-5` and `amazon.titan-embed-text-v2:0` in
@@ -142,10 +197,16 @@ can move.
   `TF_VAR_gemini_api_key`), then merge to `main` or manual dispatch. The
   deploy workflows fail at the OIDC step until then — expected. EKS
   additionally needs an NGINX ingress controller installed before the
-  Ingress routes traffic.
-- **EKS hardening follow-ups** — IRSA for Bedrock access from EKS pods;
-  tighten EKS RDS ingress from VPC-CIDR to the node security group;
-  restrict the EKS public API endpoint.
+  Ingress routes traffic, plus repo variable `EKS_CLUSTER_NAME` (the
+  existing cluster's name) and secret `TF_VAR_postgres_dsn` (DSN of the
+  existing Postgres); before the first EKS apply, `terraform state rm`
+  the resources the app-only stack no longer manages (cluster, node
+  group, addons, networking, postgres, cluster/node IAM roles) or it
+  plans their destruction.
+- **EKS hardening follow-ups** — IRSA for Bedrock access from EKS pods
+  is built (2026-11-25, app-only stack). No longer applicable as
+  Terraform items: EKS RDS ingress (the EKS stack provisions no RDS)
+  and the EKS public API endpoint (no longer Terraform-managed).
 - **True incremental chat streaming on Lambda** — Mangum buffers the whole
   response, so `/api/chat` on Lambda returns one complete SSE document,
   not incremental tokens. True streaming needs a Function URL in
@@ -169,11 +230,15 @@ can move.
   `5df8fe0` (pushed 2026-11-25, verified — the 4-commit push to
   `55a7c2c` plus the TODO push-state note). Local-only since then:
   `376268c` (run guide: namespace before the Secret in the kind
-  path). Note: the push worked with the stored credential, so the
-  Nov 15 PAT-expiry warning is stale — the credential is valid as
-  of 2026-11-25. Push on Rahul's word via the connector API script
-  `~/workspace/gh_api_push.py` (git HTTPS cannot use the vault
-  credential). Merging the branch is Rahul's later call.
+  path), `bbd3c72` (TODO note), `ddce188` (per-user history +
+  relevance-based history window), `2b8abb7` (EKS stack app-only),
+  `9eaf0cb` (GitLab CI). Docs reorg into book form (item 4) still
+  in progress, uncommitted. Note: the push worked with the stored
+  credential, so the Nov 15 PAT-expiry warning is stale — the
+  credential is valid as of 2026-11-25. Push on Rahul's word via
+  the connector API script `~/workspace/gh_api_push.py` (git
+  HTTPS cannot use the vault credential). Merging the branch is
+  Rahul's later call.
 
 ## Capabilities and guardrails
 
