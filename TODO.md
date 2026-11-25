@@ -80,6 +80,20 @@ can move.
   deploy workflows still build the UI without build args, so a
   deployed UI still gets no Okta settings baked in.
 
+- Pipeline (2026-11-25): `.github/workflows/pipeline.yml` — stage 1
+  unit tests (shared `reusable-build-test.yml`: backend pytest + UI
+  vitest + Terraform fmt/validate), stage 2 builds the API + UI
+  images and pushes them to ECR (registry built from the OIDC
+  account ID + region, repos `<project>-<environment>-api` / `-ui`,
+  tag = commit SHA; re-runs skip tags already in ECR), stage 3
+  deploy is a disabled placeholder (`if: false`) until the deploy
+  target and strategy are picked. Runs on push to `main` +
+  `feature/initial-platform` and on manual dispatch; no PR trigger
+  (ci.yml already tests PRs, and a PR must not push images). Safe to
+  merge before AWS is wired in: stage 1 runs without AWS, stage 2
+  fails at the OIDC step until the role exists. YAML validated; never
+  run on GitHub yet (no push — PAT expired).
+
 ## Live tests and verification
 
 - **Bedrock live 3-hop test** — blocked: needs Rahul's AWS credentials in
@@ -146,9 +160,17 @@ can move.
   to new invocations); blue-green/canary on Lambda map to aliases with
   weighted routing; EKS canary needs an ingress/mesh mechanism (e.g. Argo
   Rollouts/Flagger). Also noted in `deploy/terraform/README.md`.
+- **Pipeline stage 3 (deploy)** — `.github/workflows/pipeline.yml`
+  has a disabled placeholder deploy job (`if: false`); wire it once
+  the deploy target (Lambda vs EKS) and the deployment strategy are
+  picked — either a deploy step in the pipeline or a call to the
+  per-platform deploy workflow.
 - **Push and merge** — remote `feature/initial-platform` tip is
   `f52c114` (pushed 2026-11-06, verified). Local-only since then:
-  `467068a` (local run guide: no containers / containers / kind).
+  `467068a` (local run guide: no containers / containers / kind),
+  `6e0bdba` (no-decision review batch), pipeline workflow
+  (`.github/workflows/pipeline.yml`, stage 1 tests + stage 2 ECR
+  build, stage 3 placeholder).
   Nothing pushed since; push on Rahul's word via the connector API
   script `~/workspace/gh_api_push.py` (git HTTPS cannot use the vault
   credential). PAT expires Nov 15, 2026 — extend before it lapses or

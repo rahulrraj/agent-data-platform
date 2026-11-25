@@ -1,0 +1,118 @@
+# Pipeline: test -> build+push images -> deploy (placeholder for now).
+# Stage 1 runs the shared test workflow (backend pytest + UI vitest +
+# Terraform fmt/validate). Stage 2 builds the API + UI images and pushes
+# them to ECR. Stage 3 is a disabled placeholder until the deploy target
+# (Lambda vs EKS) and the deployment strategy are picked.
+#
+# How the build job knows where to push: the registry address is NOT
+# hardcoded. It is built from the AWS account ID (from the OIDC-assumed
+# role) and the region: <account>.dkr.ecr.<region>.amazonaws.com, with the
+# repo names <project>-<environment>-api / -ui. The same repo variables
+# the deploy workflows use (AWS_REGION, PROJECT_NAME, ENVIRONMENT, with
+# the defaults below) decide the destination. To push somewhere else
+# (Docker Hub, GHCR, another account's ECR), change the login step and
+# the registry construction here — the image names and tags stay the same.
+# Auth is OIDC (vars.AWS_ROLE_TO_ASSUME), no stored AWS keys.
+#
+# Safe to merge before AWS is wired in: the test job runs without AWS,
+# and the build job fails at the OIDC auth step until the role exists
+# (same as the deploy workflows). The feature branch is in the push
+# trigger so the pipeline runs before merge; drop it after merging.
+# No pull_request trigger: ci.yml already tests PRs, and a PR must not
+# push images.
+#
+# Action pins are full commit SHAs (tag in the comment), not tags:
+# Dependabot/Renovate should keep them fresh.
+name: Pipeline
+
+on:
+  push:
+    branches: ["main", "feature/initial-platform"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Stage 1 - unit tests
+    uses: ./.github/workflows/reusable-build-test.yml
+
+  build:
+    name: Stage 2 - build + push images
+    runs-on: ubuntu-latest
+    needs: test
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      PROJECT_NAME: ${{ vars.PROJECT_NAME || 'agent-data-platform' }}
+      ENVIRONMENT: ${{ vars.ENVIRONMENT || 'dev' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr
+        run: |
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          REGISTRY="$ACCOUNT_ID.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+          echo "registry=$REGISTRY" >> "$GITHUB_OUTPUT"
+          aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
+            | docker login --username AWS --password-stdin "$REGISTRY"
+
+      # Idempotent bootstrap: the ECR repos must exist BEFORE the push.
+      - name: Bootstrap ECR repositories (idempotent)
+        run: |
+          for repo in "${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-api" \
+                      "${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-ui"; do
+            aws ecr create-repository --repository-name "$repo" --region "${{ env.AWS_REGION }}" \
+              || echo "ECR repo $repo already exists"
+          done
+
+      # ECR cannot re-push the same tag — skip each image whose tag is
+      # already there, so re-runs are safe.
+      - name: Build + push images
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          API_IMAGE="${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-api:$IMAGE_TAG"
+          UI_IMAGE="${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-ui:$IMAGE_TAG"
+          if aws ecr describe-images \
+              --repository-name "${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-api" \
+              --image-ids "imageTag=$IMAGE_TAG" >/dev/null 2>&1; then
+            echo "API image $IMAGE_TAG already exists (workflow re-run) — skipping."
+          else
+            docker build -t "$API_IMAGE" .
+            docker push "$API_IMAGE"
+          fi
+          if aws ecr describe-images \
+              --repository-name "${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-ui" \
+              --image-ids "imageTag=$IMAGE_TAG" >/dev/null 2>&1; then
+            echo "UI image $IMAGE_TAG already exists (workflow re-run) — skipping."
+          else
+            # No UI build args here, same as deploy-eks: a deployed UI
+            # gets no Okta settings baked in until that is decided.
+            docker build -f src/ui/Dockerfile -t "$UI_IMAGE" .
+            docker push "$UI_IMAGE"
+          fi
+
+  deploy:
+    name: Stage 3 - deploy (placeholder)
+    runs-on: ubuntu-latest
+    needs: build
+    # Left disabled until the deploy target (Lambda vs EKS) and the
+    # deployment strategy are picked. When that is decided, replace this
+    # job with the deploy step (or a call to the per-platform deploy
+    # workflow) and remove the `if: false`.
+    if: false
+    steps:
+      - run: echo "Stage 3 not wired yet — pick the deploy target first."
