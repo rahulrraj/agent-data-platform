@@ -13,11 +13,12 @@ stack runs the same image and only differs in how it is hosted.
 - [RDS posture](#rds-posture)
 - [Stack tuning knobs (m-20)](#stack-tuning-knobs-m-20)
 - [Lambda concurrency vs RDS (m-32)](#lambda-concurrency-vs-rds-m-32)
-- [Networking: NAT, endpoints, validation](#networking-nat-endpoints-validation)
+- [Existing VPC (Lambda stack) and plan-time validation](#existing-vpc-lambda-stack-and-plan-time-validation)
 - [Frontend module (m-28)](#frontend-module-m-28)
 - [ECR tags and rollback (m-29)](#ecr-tags-and-rollback-m-29)
 - [First deployment (manual, no pipeline)](#first-deployment-manual-no-pipeline)
 - [Migrating an existing EKS stack to app-only (state hazard)](#migrating-an-existing-eks-stack-to-app-only-state-hazard)
+- [Migrating an existing Lambda stack to app-only networking (state hazard)](#migrating-an-existing-lambda-stack-to-app-only-networking-state-hazard)
 - [GitHub Actions + OIDC (pipeline prerequisites)](#github-actions--oidc-pipeline-prerequisites)
 - [GitLab CI (pipeline mirror)](#gitlab-ci-pipeline-mirror)
 - [How the pipelines wire the UI to the API](#how-the-pipelines-wire-the-ui-to-the-api)
@@ -30,7 +31,6 @@ stack runs the same image and only differs in how it is hosted.
 ```text
 deploy/terraform/
 ├── modules/                  # Shared, reusable pieces
-│   ├── networking/           # VPC, public/private subnets, NAT
 │   ├── postgres/             # RDS Postgres (conversation store)
 │   ├── ecr/                  # Container image repository
 │   ├── iam/                  # Generic IAM role factory
@@ -160,15 +160,15 @@ clean teardown.
 
 The Lambda stack passes its shared modules' tuning knobs through as
 stack variables, so operators do not edit stack `main.tf` to tune:
-networking (`vpc_cidr_block`, `az_count`, `enable_nat`, `nat_per_az`,
-`enable_vpc_endpoints`), postgres (`db_engine_version`,
-`db_instance_class`, `db_allocated_storage`, `db_multi_az`,
-`backup_retention_period`), ECR (`ecr_force_delete`,
-`ecr_image_tag_mutability`, `ecr_keep_image_count`), and frontend
-(`frontend_force_destroy`, `frontend_enable_versioning`,
-`frontend_access_log_bucket`) plus the app env vars
-(`agent_framework`, `gemini_model`, `gemini_embed_model`). The EKS
-stack is app-only, so it passes through only the ECR knobs
+postgres (`db_engine_version`, `db_instance_class`,
+`db_allocated_storage`, `db_multi_az`, `backup_retention_period`),
+ECR (`ecr_force_delete`, `ecr_image_tag_mutability`,
+`ecr_keep_image_count`), and frontend (`frontend_force_destroy`,
+`frontend_enable_versioning`, `frontend_access_log_bucket`) plus the
+app env vars (`agent_framework`, `gemini_model`,
+`gemini_embed_model`) and the existing-VPC inputs (`vpc_id`,
+`private_subnet_ids` — required, no defaults; the VPC and subnets
+pre-exist outside the stack). The EKS stack is app-only, so it passes through only the ECR knobs
 (`ecr_force_delete`, `ecr_image_tag_mutability`,
 `ecr_keep_image_count`) and the Bedrock model variables
 (`bedrock_model_id`, `bedrock_embed_model`, `enable_bedrock_invoke`,
@@ -176,8 +176,7 @@ stack is app-only, so it passes through only the ECR knobs
 knobs to tune; the cluster, network, and database pre-exist outside
 it. Defaults match the previous hardcoded behavior exactly.
 Production profile, as a starting point (Lambda stack):
-`nat_per_az = true`,
-`enable_vpc_endpoints = true`, `db_multi_az = true`,
+`db_multi_az = true`,
 `db_instance_class` raised with `lambda_reserved_concurrency` (see
 below), `deletion_protection = true`, `skip_final_snapshot = false`,
 `ecr_force_delete = false`, `frontend_force_destroy = false`,
@@ -196,21 +195,20 @@ together with `db_instance_class` (or add RDS Proxy) before any
 load-bearing use; `null` means unreserved (no cap — do not use with
 the micro instance under load).
 
-## Networking: NAT, endpoints, validation
+## Existing VPC (Lambda stack) and plan-time validation
 
-- Single NAT (default) is a single-AZ egress SPOF: if the first AZ
-  fails, Lambda model-API egress from every AZ fails. Cost is why it
-  is the dev default; set `nat_per_az = true` for production (one NAT
-  + route table per AZ). (Lambda stack only — the EKS stack creates
-  no networking; image pulls and egress on EKS run on the
-  pre-existing cluster's own network.)
-- `enable_vpc_endpoints = true` adds an S3 gateway endpoint plus
-  ECR/STS interface endpoints on the private subnets, reducing NAT
-  dependence (it requires `enable_nat = true`, since the gateway
-  endpoint attaches to the private route tables).
-- Validation fails fast: `cidr_block` must be /24 or shorter (subnets
-  are carved as /24s), `az_count` must be 1–128 and must not exceed
-  the region's AZs (the AZ slice fails the plan if it does).
+- The Lambda stack creates no networking: the VPC and private subnets
+  are inputs (`vpc_id`, `private_subnet_ids`), and the stack only
+  creates the RDS instance, the Lambda security group, and the
+  function inside them. The EKS stack likewise creates no
+  networking; image pulls and egress on EKS run on the pre-existing
+  cluster's own network.
+- The private subnets must have a route to the internet (NAT) or the
+  function cannot reach model APIs (Gemini / Bedrock). The stack
+  cannot verify the route tables, so check them before the first
+  apply. A single NAT in one AZ is a single-AZ egress SPOF — that is
+  a property of the existing VPC now, not something this stack
+  controls.
 - Cross-field checks the variable system cannot express live on the
   resources instead: the Lambda function preconditions that gemini
   has a key and bedrock has `enable_bedrock_invoke`, and the EKS
@@ -268,6 +266,8 @@ aws ecr create-repository --repository-name <repo> --region us-east-1
 #    (or set it to real JSON) rather than exporting it empty.
 export TF_VAR_db_password='...'   # Lambda stack (RDS master password)
 export TF_VAR_postgres_dsn='...'  # EKS stack (existing Postgres DSN)
+export TF_VAR_vpc_id=vpc-...  # Lambda stack (existing VPC)
+export TF_VAR_private_subnet_ids='["subnet-...","subnet-..."]'  # Lambda stack (existing private subnets)
 export TF_VAR_gemini_api_key='...'   # Lambda stack, gemini provider only
 terraform init
 terraform apply
@@ -366,6 +366,35 @@ Two more conflicts to expect on that first apply:
   remove them; the deploy workflow already reads `EKS_CLUSTER_NAME`
   and `TF_VAR_postgres_dsn` instead.
 
+## Migrating an existing Lambda stack to app-only networking (state hazard)
+
+The Lambda stack used to provision its own VPC, subnets, NAT, and
+endpoints via `module.networking`. It no longer does — the VPC and
+private subnets are inputs (`vpc_id`, `private_subnet_ids`). But an
+existing remote state file still holds those resources. **Before the
+first apply of the new config, take the removed module out of state**
+(from `deploy/terraform/stacks/aws-lambda`, with the S3 backend
+configured), or the next apply plans the destruction of the VPC the
+function and RDS run in:
+
+```bash
+terraform state rm module.networking
+```
+
+`terraform state rm` only forgets the resources — it deletes nothing
+in AWS. The VPC, subnets, and NAT keep running outside Terraform
+afterwards, which is the point: the stack now assumes they exist.
+Verify with `terraform plan` before applying: it should show no
+destructions, only the new `vpc_id` / `private_subnet_ids` inputs to
+supply. Do not run the first apply until the plan is
+destruction-free.
+
+Removed variables: `vpc_cidr_block`, `az_count`, `enable_nat`,
+`nat_per_az`, `enable_vpc_endpoints` are gone; supply `vpc_id` and
+`private_subnet_ids` instead (e.g. `-var=vpc_id=vpc-...`
+`-var=private_subnet_ids='["subnet-...","subnet-..."]'`). The deploy
+workflow passes no networking variables, so it needs no change.
+
 ## GitHub Actions + OIDC (pipeline prerequisites)
 
 Deploys use GitHub OIDC, never static AWS keys. One-time setup:
@@ -424,6 +453,8 @@ a scoped deploy role, not AdministratorAccess.
 | `AWS_ROLE_TO_ASSUME` | Variable | IAM role ARN for OIDC (not secret, but a variable keeps it out of files). |
 | `AWS_REGION` | Variable | e.g. `us-east-1`. |
 | `EKS_CLUSTER_NAME` | Variable | Name of the existing EKS cluster (deploy-eks only). The stack creates no cluster; an empty value fails the plan at the stack's `cluster_name` validation. |
+| `AWS_VPC_ID` | Variable | ID of the existing VPC for the Lambda stack (deploy-lambda only). The stack creates no VPC; an empty value fails the plan at the stack's `vpc_id` validation. |
+| `AWS_PRIVATE_SUBNET_IDS` | Variable | JSON list of the existing private subnet IDs for the Lambda stack (deploy-lambda only), e.g. `["subnet-aaa","subnet-bbb"]`. The stack creates no subnets; fewer than two fails the plan at the stack's `private_subnet_ids` validation. |
 | `TF_VAR_db_password` | Secret | RDS master password for the Lambda stack only (the EKS stack takes an existing Postgres DSN instead and has no `db_password` variable). |
 | `TF_VAR_postgres_dsn` | Secret | Postgres DSN for the EKS stack (deploy-eks only) — the existing database the k8s Secret points at. |
 | `TF_VAR_gemini_api_key` | Secret | GEMINI_API_KEY for the Lambda stack when provider is gemini. |
@@ -568,8 +599,8 @@ Concrete GCP mapping for later (not built):
 | Frontend | S3 + CloudFront (`modules/frontend`) | Cloud Storage + Cloud CDN |
 | Identity | IAM roles (`modules/iam`) | GCP service accounts (per-stack, like EKS roles) |
 
-Modules that are genuinely platform-neutral (networking shapes, Postgres
-semantics, frontend semantics) get a per-cloud counterpart with the same
+Modules that are genuinely platform-neutral (Postgres semantics,
+frontend semantics) get a per-cloud counterpart with the same
 outputs; modules whose trust model is platform-specific (IAM roles vs
 GCP service accounts) live per stack. Do not force one module to cover
 two clouds' identity systems.

@@ -1,6 +1,8 @@
 # AWS Lambda stack: the same container image + env vars as every other
 # platform, behind a Lambda Function URL (NOT API Gateway — its 29s cap
 # cannot serve agent turns that run minutes). See ../../README.md.
+# The VPC is an existing input (vpc_id / private_subnet_ids) — this
+# stack creates no networking of its own.
 
 locals {
   # The stack suffix keeps this stack's resource names distinct from the
@@ -32,18 +34,6 @@ locals {
   ])
 }
 
-module "networking" {
-  source = "../../modules/networking"
-
-  name                 = local.name_prefix
-  cidr_block           = var.vpc_cidr_block
-  az_count             = var.az_count
-  enable_nat           = var.enable_nat
-  nat_per_az           = var.nat_per_az
-  enable_vpc_endpoints = var.enable_vpc_endpoints
-  tags                 = local.common_tags
-}
-
 module "postgres" {
   source = "../../modules/postgres"
 
@@ -58,8 +48,8 @@ module "postgres" {
   deletion_protection        = var.deletion_protection
   skip_final_snapshot        = var.skip_final_snapshot
   backup_retention_period    = var.backup_retention_period
-  subnet_ids                 = module.networking.private_subnet_ids
-  vpc_id                     = module.networking.vpc_id
+  subnet_ids                 = var.private_subnet_ids
+  vpc_id                     = var.vpc_id
   allowed_security_group_ids = [aws_security_group.lambda.id]
   tags                       = local.common_tags
 }
@@ -110,7 +100,7 @@ module "frontend" {
 resource "aws_security_group" "lambda" {
   name        = "${local.name_prefix}-lambda-sg"
   description = "Lambda function egress"
-  vpc_id      = module.networking.vpc_id
+  vpc_id      = var.vpc_id
 
   egress {
     description = "All egress (RDS, model APIs)"
@@ -165,7 +155,7 @@ resource "aws_lambda_function" "api" {
   }
 
   vpc_config {
-    subnet_ids         = module.networking.private_subnet_ids
+    subnet_ids         = var.private_subnet_ids
     security_group_ids = [aws_security_group.lambda.id]
   }
 

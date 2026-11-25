@@ -22,38 +22,33 @@ variable "image_tag" {
   default     = "latest"
 }
 
-# --- Shared module tuning knobs (m-20): pass-throughs so operators can
-# tune the shared modules without editing stack main.tf. Defaults match
-# the previous hardcoded behavior exactly, so existing deploys are
-# unchanged unless a knob is set.
-variable "vpc_cidr_block" {
-  description = "VPC CIDR block (networking module). Prefix must be /24 or shorter."
+# --- The existing VPC (input, not created) ---
+#
+# The stack assumes the VPC already exists: it creates the RDS instance,
+# the Lambda security group, and the function inside it, but no VPC,
+# subnets, NAT, or endpoints. The private subnets must have a route to
+# the internet (NAT) or the function cannot reach model APIs (Gemini /
+# Bedrock) — the stack cannot verify that, so check the route tables
+# before the first apply.
+
+variable "vpc_id" {
+  description = "ID of the EXISTING VPC to deploy into (RDS, Lambda security group, function). Pass via -var=vpc_id=... — this stack creates no VPC of its own."
   type        = string
-  default     = "10.0.0.0/16"
+
+  validation {
+    condition     = length(var.vpc_id) > 0
+    error_message = "vpc_id must be set to the ID of the existing VPC — this stack creates no VPC of its own."
+  }
 }
 
-variable "az_count" {
-  description = "Number of AZs to span (networking module). Must not exceed the AZs available in the region."
-  type        = number
-  default     = 2
-}
+variable "private_subnet_ids" {
+  description = "IDs of the EXISTING private subnets for the RDS instance and the Lambda function (at least two, in different AZs for RDS). They must have a route to the internet (NAT) for model-API egress. Pass via -var=private_subnet_ids=[\"subnet-...\", \"subnet-...\"] — this stack creates no subnets of its own."
+  type        = list(string)
 
-variable "enable_nat" {
-  description = "Create NAT gateway(s) for private-subnet egress (networking module)."
-  type        = bool
-  default     = true
-}
-
-variable "nat_per_az" {
-  description = "One NAT gateway per AZ instead of a single shared one (networking module). Set true for production: the single-NAT default is a single-AZ egress SPOF."
-  type        = bool
-  default     = false
-}
-
-variable "enable_vpc_endpoints" {
-  description = "Create S3/ECR/STS VPC endpoints to reduce NAT dependence (networking module). Requires enable_nat = true."
-  type        = bool
-  default     = false
+  validation {
+    condition     = length(var.private_subnet_ids) >= 2
+    error_message = "private_subnet_ids needs at least two existing private subnets (RDS requires subnets in at least two AZs)."
+  }
 }
 
 variable "db_engine_version" {

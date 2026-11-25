@@ -140,13 +140,19 @@ can move.
   role for the API pods (trust-pinned to
   `system:serviceaccount:agent-platform:agent-api`). New
   `deploy/k8s/serviceaccount.yaml`; workflow reads
-  `EKS_CLUSTER_NAME` + `TF_VAR_postgres_dsn`. No shared module
-  deleted (aws-lambda still uses all of them). `terraform
+  `EKS_CLUSTER_NAME` + `TF_VAR_postgres_dsn`. `terraform
   validate` clean on both stacks. STATE HAZARD: old remote state
   still holds the removed resources — `terraform state rm` them
   before the first apply or it plans destruction of the cluster,
-  VPC, and RDS. Docs updated by the book-form reorg pass (item 4,
-  in progress).
+  VPC, and RDS (documented in `deploy/terraform/README.md`).
+  Lambda stack is app-only for networking too (2026-11-25):
+  `stacks/aws-lambda` takes an existing VPC (`vpc_id`) and private
+  subnets (`private_subnet_ids`, ≥2, must have a NAT route for
+  model-API egress) as inputs; `modules/networking` deleted
+  (it was the last user). Same state hazard for the VPC:
+  `terraform state rm module.networking` before the first apply.
+  RDS creation stays in the Lambda stack (the AWS-specific piece).
+  Docs updated by the book-form reorg pass (item 4, in progress).
 
 - GitLab CI (2026-11-25): `.gitlab-ci.yml` mirrors the GitHub
   pipeline (tests with no AWS; build+push API/UI images to ECR
