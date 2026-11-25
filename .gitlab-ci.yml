@@ -1,0 +1,280 @@
+# GitLab CI mirror of .github/workflows/pipeline.yml.
+#
+# The repo lives on GitHub, but this file lets the same pipeline run on
+# GitLab: stage 1 tests (no AWS), stage 2 builds and pushes the API + UI
+# images to ECR, stage 3 is a disabled deploy placeholder. Keep the two
+# pipelines in step: any change to the GitHub pipeline's stages, test
+# commands, image names, or tags belongs here too, translated into
+# GitLab syntax (stages/jobs/rules/needs instead of jobs/steps).
+#
+# ---------------------------------------------------------------------------
+# SETUP REQUIRED BEFORE STAGE 2 CAN RUN (stage 1 needs nothing but a runner)
+# ---------------------------------------------------------------------------
+# 1. GitLab project variables — Settings > CI/CD > Variables:
+#      AWS_ROLE_TO_ASSUME  The ARN of the IAM role the build job assumes,
+#                          e.g. arn:aws:iam::123456789012:role/gitlab-ci-ecr-push.
+#                          Mark it Masked (and Protected if you only want
+#                          protected branches to use it). REQUIRED — there is
+#                          no default; the build job fails fast without it.
+#      AWS_REGION          AWS region for ECR/STS, e.g. us-east-1. Optional:
+#                          defaults to us-east-1 below, same as GitHub.
+#      PROJECT_NAME        Optional: defaults to agent-data-platform.
+#      ENVIRONMENT         Optional: defaults to dev.
+#    The ECR repo names are built from these exactly as in GitHub:
+#    <PROJECT_NAME>-<ENVIRONMENT>-api and <PROJECT_NAME>-<ENVIRONMENT>-ui,
+#    tagged with the commit SHA ($CI_COMMIT_SHA, GitHub's github.sha).
+#    No stored AWS keys are used anywhere: auth is OIDC only.
+#
+# 2. AWS side — create once, in the account that owns the ECR repos:
+#    a. IAM OIDC identity provider for GitLab:
+#         Provider URL: https://gitlab.com
+#         Audience:     https://gitlab.com
+#       (Self-managed GitLab: use your instance URL for both. The audience
+#       registered on the provider MUST match the `aud:` in this file's
+#       id_tokens block, or STS rejects the token.)
+#    b. IAM role (the ARN you put in AWS_ROLE_TO_ASSUME) whose trust policy
+#       allows sts:AssumeRoleWithWebIdentity from that provider, with
+#       conditions pinning the token to this project and branch, e.g.:
+#         "Condition": {
+#           "StringEquals": {
+#             "gitlab.com:aud": "https://gitlab.com"
+#           },
+#           "StringLike": {
+#             "gitlab.com:sub": "project_path:<group>/<project>:ref_type:branch:ref:main"
+#           }
+#         }
+#       Replace <group>/<project> with the real GitLab project path and add
+#       a second subject (or a wildcard ref) for feature/initial-platform
+#       while that branch is the pipeline trigger. See the caveat below.
+#    c. Permissions on that role — at least the AWS calls this file makes:
+#         sts:GetCallerIdentity, ecr:GetAuthorizationToken,
+#         ecr:CreateRepository, ecr:DescribeImages (the skip-if-tag-exists
+#         check), and the push calls ecr:BatchCheckLayerAvailability,
+#         ecr:PutImage, ecr:InitiateLayerUpload, ecr:UploadLayerPart,
+#         ecr:CompleteLayerUpload. Scope the ECR permissions to the two
+#         <project>-<environment>-api / -ui repos where possible.
+#    Until 2a–2c exist, stage 2 fails at the assume-role step — same as the
+#    GitHub pipeline fails at OIDC auth until its role exists. Stage 1 is
+#    unaffected: it runs with no AWS at all.
+#
+# OIDC CAVEAT — READ BEFORE LOCKING THE TRUST POLICY:
+#    The subject format above (project_path:<group>/<project>:ref_type:branch:
+#    ref:<branch>) is GitLab's documented DEFAULT `sub` claim for ID tokens
+#    (GitLab docs, "Id token authentication": `sub` defaults to
+#    project_path:{group}/{project}:ref_type:{type}:ref:{branch_name}, and
+#    can be reconfigured for the project via the projects API). It was
+#    confirmed against GitLab's own help pages and the GitLab AWS tutorial,
+#    but NOT against a live GitLab instance or a token minted by this
+#    project — this repo has no GitLab project yet, so the real project
+#    path is unknown and the claim has not been observed. Before relying
+#    on the trust policy, mint a token in a test job (e.g. decode
+#    $GITLAB_OIDC_TOKEN at jwt.io or with `jq -R 'split(".")[1] | @base64d'`)
+#    and confirm the `sub` your instance actually emits, including whether
+#    your GitLab version appends extra fields (e.g. ref_protected).
+#    On GitLab.com, AWS additionally supports namespace_id and project_id
+#    as trust-policy condition keys; prefer pinning those numeric IDs
+#    alongside `sub` if your setup allows it, since paths can be renamed.
+#
+# ---------------------------------------------------------------------------
+# HOW THIS MAPS TO THE GITHUB PIPELINE
+# ---------------------------------------------------------------------------
+#   GitHub                              GitLab (this file)
+#   pipeline.yml `test` job            backend-test + ui-test + terraform-check
+#     (calls reusable-build-test.yml)   (the same three jobs, inlined — GitLab
+#                                        has no reusable-workflow call)
+#   pipeline.yml `build` job           build-push (id_tokens + assume-role
+#     (OIDC via configure-aws-         with-web-identity instead of the
+#      credentials action)              configure-aws-credentials action)
+#   pipeline.yml `deploy` job          deploy-placeholder (rules: - when: never,
+#     (if: false)                       the GitLab equivalent of `if: false`)
+#   Triggers: push to main /            workflow: rules below (push to the same
+#     feature/initial-platform, plus     branches, plus manual/web runs — the
+#     workflow_dispatch                GitLab equivalent of workflow_dispatch).
+#     No PR trigger (ci.yml covers      No merge-request pipelines: workflow
+#     PRs; a PR must not push images).  rules only allow push + web sources.
+#   Tag = github.sha                    Tag = $CI_COMMIT_SHA.
+#   concurrency group `pipeline`        resource_group: pipeline on build-push
+#     (cancel-in-progress: false)       (serializes builds; GitLab has no
+#                                        workflow-level equivalent).
+
+stages:
+  - test
+  - build
+  - deploy
+
+# Defaults mirror the GitHub pipeline's env fallbacks
+# (vars.AWS_REGION || 'us-east-1', etc.). Set the same names as GitLab
+# project CI/CD variables to override them; AWS_ROLE_TO_ASSUME has no
+# default and must be set (see the setup notes above).
+variables:
+  AWS_REGION: "us-east-1"
+  PROJECT_NAME: "agent-data-platform"
+  ENVIRONMENT: "dev"
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "feature/initial-platform")
+    - if: $CI_PIPELINE_SOURCE == "web"  # manual run from the GitLab UI (workflow_dispatch equivalent)
+    - when: never
+
+# ---------------------------------------------------------------------------
+# Stage 1 — tests. No AWS anywhere in this stage, same as GitHub.
+# Mirrors .github/workflows/reusable-build-test.yml job for job:
+# backend pytest + UI vitest + Terraform fmt/validate.
+# ---------------------------------------------------------------------------
+
+backend-test:
+  stage: test
+  image: python:3.12
+  script:
+    # Same as reusable-build-test.yml `backend-test`: Python 3.12,
+    # backend + test deps, then the full pytest suite. The adapter test
+    # hits real Ollama and skips itself when the server is down.
+    - python -m pip install --upgrade pip
+    - pip install -e ".[dev,postgres]"
+    # mangum is installed separately (not the lambda extra) because the
+    # Lambda handler tests import it, while the runtime-interface client
+    # is only a container entrypoint and never imported.
+    - pip install "mangum>=0.22"
+    - python -m pytest -q
+
+ui-test:
+  stage: test
+  image: node:20
+  cache:
+    key:
+      files:
+        - src/ui/package-lock.json
+    paths:
+      - src/ui/node_modules/
+  script:
+    # Same as reusable-build-test.yml `ui-test`: Node 20, npm ci in
+    # src/ui, then vitest. (GitHub's setup-node npm cache is the
+    # equivalent of the cache: block above.)
+    - cd src/ui
+    - npm ci
+    - npm test
+
+terraform-check:
+  stage: test
+  # Same pinned version as the GitHub deploy jobs: plan artifacts are
+  # version-sensitive, so fmt/validate must not run a different
+  # Terraform than plan/apply do.
+  image: hashicorp/terraform:1.9.0
+  script:
+    - terraform fmt -check -recursive deploy/terraform
+    # Validate stacks with no backend and no AWS access, same as GitHub.
+    - |
+      for stack in deploy/terraform/stacks/*/; do
+        echo "== $stack =="
+        (cd "$stack" && terraform init -backend=false -input=false >/dev/null && terraform validate)
+      done
+
+# ---------------------------------------------------------------------------
+# Stage 2 — build + push API and UI images to ECR.
+# ---------------------------------------------------------------------------
+
+build-push:
+  stage: build
+  # Docker-in-Docker: GitHub runners have Docker preinstalled; GitLab
+  # shared runners need the docker service. DOCKER_TLS_CERTDIR: "" keeps
+  # the classic tcp://docker:2375 (no-TLS) setup.
+  image: docker:24
+  services:
+    - docker:24-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  # GitLab OIDC: GitLab mints a signed ID token for this job and exposes
+  # it as $GITLAB_OIDC_TOKEN. `aud` must match the audience registered
+  # on the AWS IAM OIDC provider (see setup notes above). This replaces
+  # GitHub's id-token: write permission + configure-aws-credentials
+  # action; the old pre-defined CI_JOB_JWT variables are retired.
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: https://gitlab.com
+  needs:
+    - backend-test
+    - ui-test
+    - terraform-check
+  # Closest GitLab equivalent of the GitHub pipeline's concurrency group
+  # `pipeline` (cancel-in-progress: false): only one build-push runs at
+  # a time. (GitLab has no workflow-level concurrency setting.)
+  resource_group: pipeline
+  before_script:
+    - |
+      if [ -z "$AWS_ROLE_TO_ASSUME" ]; then
+        echo "AWS_ROLE_TO_ASSUME is not set. Set it under Settings > CI/CD > Variables (see the header comments of this file)."
+        exit 1
+      fi
+    # Install AWS CLI v2 (the docker:24 image ships no AWS CLI).
+    - apk add --no-cache curl unzip >/dev/null
+    - curl -sS "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+    - unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install >/dev/null
+    # Assume the deploy role with the GitLab OIDC token and export the
+    # temporary credentials, mirroring what configure-aws-credentials
+    # does on GitHub. Session name is scoped to this job.
+    - |
+      export $(aws sts assume-role-with-web-identity \
+        --role-arn "$AWS_ROLE_TO_ASSUME" \
+        --role-session-name "gitlab-$CI_JOB_ID" \
+        --web-identity-token "$GITLAB_OIDC_TOKEN" \
+        --duration-seconds 3600 \
+        --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+        --output text | awk '{print "AWS_ACCESS_KEY_ID="$1"\nAWS_SECRET_ACCESS_KEY="$2"\nAWS_SESSION_TOKEN="$3}')
+    - export AWS_DEFAULT_REGION="$AWS_REGION"
+    - aws sts get-caller-identity
+  script:
+    # Log in to ECR. The registry address is built from the account ID
+    # of the assumed role + region, never hardcoded — same as GitHub.
+    - ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+    - REGISTRY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+    - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
+    # Idempotent bootstrap: the ECR repos must exist BEFORE the push.
+    - |
+      for repo in "$PROJECT_NAME-$ENVIRONMENT-api" "$PROJECT_NAME-$ENVIRONMENT-ui"; do
+        aws ecr create-repository --repository-name "$repo" --region "$AWS_REGION" \
+          || echo "ECR repo $repo already exists"
+      done
+    # ECR cannot re-push the same tag — skip each image whose tag is
+    # already there, so re-runs are safe. Tag is the commit SHA, same
+    # as GitHub (github.sha -> $CI_COMMIT_SHA).
+    - |
+      API_IMAGE="$REGISTRY/$PROJECT_NAME-$ENVIRONMENT-api:$CI_COMMIT_SHA"
+      UI_IMAGE="$REGISTRY/$PROJECT_NAME-$ENVIRONMENT-ui:$CI_COMMIT_SHA"
+      if aws ecr describe-images \
+          --repository-name "$PROJECT_NAME-$ENVIRONMENT-api" \
+          --image-ids "imageTag=$CI_COMMIT_SHA" >/dev/null 2>&1; then
+        echo "API image $CI_COMMIT_SHA already exists (pipeline re-run) — skipping."
+      else
+        docker build -t "$API_IMAGE" .
+        docker push "$API_IMAGE"
+      fi
+      if aws ecr describe-images \
+          --repository-name "$PROJECT_NAME-$ENVIRONMENT-ui" \
+          --image-ids "imageTag=$CI_COMMIT_SHA" >/dev/null 2>&1; then
+        echo "UI image $CI_COMMIT_SHA already exists (pipeline re-run) — skipping."
+      else
+        # No UI build args here, same as deploy-eks: a deployed UI gets
+        # no Okta settings baked in until that is decided.
+        docker build -f src/ui/Dockerfile -t "$UI_IMAGE" .
+        docker push "$UI_IMAGE"
+      fi
+
+# ---------------------------------------------------------------------------
+# Stage 3 — deploy (placeholder, disabled).
+# ---------------------------------------------------------------------------
+
+deploy-placeholder:
+  stage: deploy
+  needs:
+    - build-push
+  # Idiomatic GitLab equivalent of GitHub's `if: false`: the job is
+  # never created. When the deploy target (Lambda vs EKS) and the
+  # deployment strategy are picked, replace this job with the real
+  # deploy step and remove the rules block.
+  rules:
+    - when: never
+  script:
+    - echo "Stage 3 not wired yet — pick the deploy target first."
