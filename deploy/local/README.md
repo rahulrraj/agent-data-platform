@@ -69,19 +69,19 @@ Then open `http://localhost:8501` and sign in.
 
 ## Notes
 
-- **Docker Hub rate limits.** The script pulls the base images from ECR
-  Public (`public.ecr.aws/...`) and tags them with the names the
-  Dockerfiles use, because Docker Hub returns 429 on rate-limited
-  networks. If you change a `FROM` line, change the matching pull here.
+- **Docker Hub rate limits.** The Dockerfiles pull their base images
+  from ECR Public (`public.ecr.aws/...`) directly, because Docker Hub
+  returns 429 on rate-limited networks. If you change a `FROM` line,
+  keep the ECR Public source.
 - **AWS credentials expire.** They are short-lived keys exported from
   your SSO profile. If Bedrock calls start failing, run `up` again for
   fresh ones. A deployed container would use an IAM role instead (the
   Lambda stack already wires one — see `deploy/terraform/README.md`).
 - **A UI settings change needs a rebuild** (`run.sh build`): the OIDC
   values are baked into the bundle at build time. The Dockerfile takes
-  no build arguments, so the build writes a temporary
-  `src/ui/.env.production` and deletes it afterwards — do not commit
-  that file.
+  them as build args (`VITE_OIDC_ISSUER`, `VITE_OIDC_CLIENT_ID`,
+  optional `VITE_OIDC_AUDIENCE`); `run.sh build` passes them from the
+  environment.
 - **Capability changes need a rebuild too**: the Dockerfile copies
   `registry/` into the API image. Or mount a file and point
   `CAPABILITIES_PATH` at it, e.g. add

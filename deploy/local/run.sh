@@ -49,19 +49,9 @@ elif [[ -n "${DATA_CONNECTIONS:-}" ]]; then
     DATA_CONNECTIONS_ARG=(-e "DATA_CONNECTIONS=$DATA_CONNECTIONS")
 fi
 
-# Docker Hub returns 429 (rate limit) on some networks. The same official
-# images are on ECR Public; pull from there and tag with the names the
-# Dockerfiles use, so the builds below need no change.
-pull_base_images() {
-    docker pull public.ecr.aws/docker/library/python:3.12-slim
-    docker tag public.ecr.aws/docker/library/python:3.12-slim python:3.12-slim
-    docker pull public.ecr.aws/docker/library/node:20-slim
-    docker tag public.ecr.aws/docker/library/node:20-slim node:20-slim
-    docker pull public.ecr.aws/nginx/nginx-unprivileged:1.28-alpine
-    docker tag public.ecr.aws/nginx/nginx-unprivileged:1.28-alpine \
-        nginxinc/nginx-unprivileged:1.28-alpine
-}
-
+# Base images come from ECR Public directly in the Dockerfiles
+# (Docker Hub 429s on rate-limited networks), so there is no
+# pull-and-retag step here anymore.
 build_api() {
     # The repo's Dockerfile as is: copies src/ and registry/, including
     # the capability files. Changing capabilities means rebuilding, or
@@ -70,22 +60,18 @@ build_api() {
 }
 
 build_ui() {
-    # The UI's Okta settings are build-time only and the Dockerfile has
-    # no build arguments, so a temporary .env.production is written for
-    # the build and deleted afterwards (trap: also on failure).
+    # The UI's Okta settings are build-time only; the Dockerfile takes
+    # them as build args (VITE_OIDC_ISSUER / VITE_OIDC_CLIENT_ID).
     : "${VITE_OIDC_ISSUER:?set VITE_OIDC_ISSUER (same issuer as AUTH_ISSUER)}"
     : "${VITE_OIDC_CLIENT_ID:?set VITE_OIDC_CLIENT_ID (the Okta SPA app client id)}"
-    local env_file="$REPO_DIR/src/ui/.env.production"
-    trap 'rm -f "$env_file"' EXIT
-    printf 'VITE_OIDC_ISSUER=%s\nVITE_OIDC_CLIENT_ID=%s\n' \
-        "$VITE_OIDC_ISSUER" "$VITE_OIDC_CLIENT_ID" > "$env_file"
-    docker build -t "$UI_IMAGE" -f "$REPO_DIR/src/ui/Dockerfile" "$REPO_DIR"
-    rm -f "$env_file"
-    trap - EXIT
+    docker build -t "$UI_IMAGE" -f "$REPO_DIR/src/ui/Dockerfile" \
+        --build-arg "VITE_OIDC_ISSUER=$VITE_OIDC_ISSUER" \
+        --build-arg "VITE_OIDC_CLIENT_ID=$VITE_OIDC_CLIENT_ID" \
+        ${VITE_OIDC_AUDIENCE:+--build-arg "VITE_OIDC_AUDIENCE=$VITE_OIDC_AUDIENCE"} \
+        "$REPO_DIR"
 }
 
 cmd_build() {
-    pull_base_images
     build_api
     build_ui
 }
@@ -118,7 +104,7 @@ cmd_up() {
     # the UI container (see front-door.conf).
     docker run -d --name agent-door --network "$NETWORK" -p "$FRONT_DOOR_PORT:8080" \
         -v "$FRONT_DOOR_CONF:/etc/nginx/conf.d/default.conf:ro" \
-        nginxinc/nginx-unprivileged:1.28-alpine
+        public.ecr.aws/nginx/nginx-unprivileged:1.28-alpine
 
     echo "UI: http://localhost:$FRONT_DOOR_PORT"
     echo "API (via the front door): http://localhost:$FRONT_DOOR_PORT/api/health"
@@ -135,7 +121,7 @@ case "${1:-}" in
     down)  cmd_down ;;
     *)
         echo "usage: $0 {build|up|down}" >&2
-        echo "  build  # base images + API image + UI image" >&2
+        echo "  build  # API image + UI image (bases from ECR Public)" >&2
         echo "  up     # network + 3 containers (fresh AWS credentials each time)" >&2
         echo "  down   # remove the containers" >&2
         exit 2

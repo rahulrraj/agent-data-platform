@@ -56,8 +56,8 @@ python -m agent_api.main
 ```bash
 # terminal 2 — the UI on :5173
 cd src/ui
-npm ci                          # once (the committed node_modules is
-                                # incomplete — it has no dist/ folders)
+npm ci                          # once (node_modules is not committed —
+                                # a fresh checkout runs this first)
 VITE_OIDC_ISSUER=https://<tenant>.oktapreview.com/oauth2/<auth-server-id> \
 VITE_OIDC_CLIENT_ID=<the Okta SPA app's client id> \
 npm run dev

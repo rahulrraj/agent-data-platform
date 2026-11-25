@@ -54,6 +54,32 @@ can move.
   to `deploy/k8s/configmap.yaml` — the manifests previously wired no
   auth at all, so pods would fail closed on startup.
 
+- No-decision review batch, done (2026-11-25, Rahul: "Can you do that
+  by yourself"): the items from the 2026-11-25 laptop-doc review that
+  needed no decision from him. (1) All three Dockerfiles pull bases
+  from ECR Public (`public.ecr.aws/...`); `deploy/local/run.sh` no
+  longer pulls-and-retags and passes the UI settings as build args,
+  and its front-door container uses the ECR image name too. (2) UI
+  Dockerfile takes `VITE_OIDC_ISSUER` / `VITE_OIDC_CLIENT_ID` /
+  `VITE_OIDC_AUDIENCE` / `VITE_API_URL` build args (all default
+  empty); verified the mechanism by building with test values and
+  finding them baked into `dist/assets/*.js`. (3) Swagger shows an
+  Authorize button: `HTTPBearer(auto_error=False)` declared on
+  `/api/ask` and `/api/chat` only — documentation only, enforcement
+  is unchanged (`_authenticate` still gates); verified in
+  `/openapi.json`, health/ready stay public. (4) `node_modules`
+  untracked (`git rm --cached`, 5,126 files; stays on disk locally)
+  and `src/ui/node_modules/` added to `.gitignore`; a fresh checkout
+  runs `npm ci` first. Verified: backend 489 passed / 5 skipped
+  (19 telemetry failures are a pre-existing venv gap — missing
+  `opentelemetry.exporter`/`mangum`, untouched by this change),
+  controller tests 34 passed / 1 skipped, UI tests 93 passed.
+  NOT verified here: no docker on this VM, so no image was actually
+  built — run `deploy/local/run.sh build` on a machine with docker
+  before trusting the Dockerfiles. NOT done (needs his call): the
+  deploy workflows still build the UI without build args, so a
+  deployed UI still gets no Okta settings baked in.
+
 ## Live tests and verification
 
 - **Bedrock live 3-hop test** — blocked: needs Rahul's AWS credentials in

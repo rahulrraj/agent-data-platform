@@ -6,7 +6,10 @@
 # This image deliberately stays root (m-27): the Lambda runtime
 # interface client runs as root by design, unlike the EKS images, which
 # run as non-root users.
-FROM python:3.12-slim
+# Base from ECR Public, not Docker Hub (Docker Hub 429s on
+# rate-limited networks): public.ecr.aws/docker/library mirrors the
+# official python image.
+FROM public.ecr.aws/docker/library/python:3.12-slim
 
 WORKDIR /app
 COPY pyproject.toml README.md ./

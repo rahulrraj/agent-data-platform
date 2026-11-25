@@ -29,9 +29,10 @@ from __future__ import annotations
 
 import json
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from agent_api.ports.token_validator import (
@@ -127,6 +128,19 @@ def create_app(
     """
     app = FastAPI(title="Agent API")
 
+    # Swagger "Authorize" button: the data endpoints take a bearer token
+    # (ADR 0008), validated manually by _authenticate so auth can stay
+    # off entirely in dev (no validator wired). Declaring the scheme
+    # here only documents it in OpenAPI — HTTPBearer with auto_error
+    # False never rejects a request itself, so enforcement is unchanged.
+    # /api/health and /api/ready stay public and carry no security.
+    bearer = HTTPBearer(auto_error=False)
+
+    def _documented_bearer(
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    ) -> HTTPAuthorizationCredentials | None:
+        return credentials
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(cors_origins),
@@ -153,7 +167,11 @@ def create_app(
             content={"status": "not_ready", "failing": list(report.failing)},
         )
 
-    @app.post("/api/ask", response_model=ChatResponse)
+    @app.post(
+        "/api/ask",
+        response_model=ChatResponse,
+        dependencies=[Depends(_documented_bearer)],
+    )
     def ask(req: ChatRequest, request: Request):
         # Sync def, deliberately: FastAPI runs sync endpoints in its
         # threadpool, so a minutes-long model turn cannot block the
@@ -174,7 +192,7 @@ def create_app(
             reply=reply.text, tools_used=list(reply.tool_uses), session_id=req.session_id
         )
 
-    @app.post("/api/chat")
+    @app.post("/api/chat", dependencies=[Depends(_documented_bearer)])
     async def chat(req: ChatRequest, request: Request):
         # Authenticate BEFORE the StreamingResponse is returned: an
         # unauthenticated caller gets a plain 401, never a started

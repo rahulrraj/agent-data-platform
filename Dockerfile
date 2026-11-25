@@ -1,7 +1,10 @@
 # Base is minor-pinned (3.12-slim). Digest pinning is deferred: digests
 # are per-architecture and could not be resolved without docker here;
 # a digest pin must cover both amd64 and arm64 manifests, not one arch.
-FROM python:3.12-slim
+# Base comes from ECR Public, not Docker Hub (Docker Hub 429s on
+# rate-limited networks): public.ecr.aws/docker/library mirrors the
+# official python image.
+FROM public.ecr.aws/docker/library/python:3.12-slim
 
 WORKDIR /app
 COPY pyproject.toml README.md ./
