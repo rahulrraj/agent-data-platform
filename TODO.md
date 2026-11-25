@@ -166,14 +166,14 @@ can move.
   picked — either a deploy step in the pipeline or a call to the
   per-platform deploy workflow.
 - **Push and merge** — remote `feature/initial-platform` tip is
-  `55a7c2c` (pushed 2026-11-25, verified — all 4 commits replayed
-  with identical SHAs: local run guide, TODO note, no-decision
-  review batch, pipeline workflow). Note: the push worked with the
-  stored credential, so the Nov 15 PAT-expiry warning is stale —
-  the credential is valid as of 2026-11-25. Push on Rahul's word
-  via the connector API script `~/workspace/gh_api_push.py` (git
-  HTTPS cannot use the vault credential). Merging the branch is
-  Rahul's later call.
+  `5df8fe0` (pushed 2026-11-25, verified — the 4-commit push to
+  `55a7c2c` plus the TODO push-state note). Local-only since then:
+  `376268c` (run guide: namespace before the Secret in the kind
+  path). Note: the push worked with the stored credential, so the
+  Nov 15 PAT-expiry warning is stale — the credential is valid as
+  of 2026-11-25. Push on Rahul's word via the connector API script
+  `~/workspace/gh_api_push.py` (git HTTPS cannot use the vault
+  credential). Merging the branch is Rahul's later call.
 
 ## Capabilities and guardrails
 
