@@ -16,74 +16,65 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "cluster_version" {
-  description = "EKS Kubernetes version. 1.36 (standard support until Aug 2027): the previous default 1.29 left standard support in Mar 2025 and extended support in Mar 2026, so it is out of support entirely. Keep the deploy-eks workflow's kubectl version on the same minor (kubectl skew policy). Addon versions resolve per cluster version via data sources in main.tf."
+# --- The existing cluster (input, not created) ---
+
+variable "cluster_name" {
+  description = "Name of the EXISTING EKS cluster to deploy onto. The cluster, its VPC/subnets, node groups, and addons already exist outside this stack — this stack only reads the cluster (data source) and deploys the application onto it. Pass via -var=cluster_name=... (the deploy workflow reads the EKS_CLUSTER_NAME repo variable)."
   type        = string
-  default     = "1.36"
+
+  validation {
+    condition     = length(var.cluster_name) > 0
+    error_message = "cluster_name must be set to the name of the existing EKS cluster — this stack creates no cluster of its own."
+  }
 }
 
-# --- Shared module tuning knobs (m-20): same pass-throughs as the
-# Lambda stack, so both stacks stay consistent. Defaults match the
-# previous hardcoded behavior exactly.
-variable "vpc_cidr_block" {
-  description = "VPC CIDR block (networking module). Prefix must be /24 or shorter."
+# --- The existing database (input, not created) ---
+
+variable "postgres_dsn" {
+  description = "Postgres DSN for the conversation store (POSTGRES_DSN in the k8s Secret). The database already exists outside this stack — e.g. the RDS instance provisioned by the aws-lambda stack, or any Postgres reachable from the cluster. Sensitive — pass via TF_VAR_postgres_dsn, never a default or a committed value."
   type        = string
-  default     = "10.0.0.0/16"
+  sensitive   = true
 }
 
-variable "az_count" {
-  description = "Number of AZs to span (networking module). Must not exceed the AZs available in the region."
-  type        = number
-  default     = 2
-}
+# --- Model provider (drives the IRSA Bedrock policy) ---
 
-variable "enable_nat" {
-  description = "Create NAT gateway(s) for private-subnet egress (networking module)."
-  type        = bool
-  default     = true
-}
-
-variable "nat_per_az" {
-  description = "One NAT gateway per AZ instead of a single shared one (networking module). Set true for production: the single-NAT default is a single-AZ egress SPOF."
-  type        = bool
-  default     = false
-}
-
-variable "enable_vpc_endpoints" {
-  description = "Create S3/ECR/STS VPC endpoints to reduce NAT dependence (networking module). Requires enable_nat = true."
-  type        = bool
-  default     = false
-}
-
-variable "db_engine_version" {
-  description = "Postgres major version for RDS (postgres module)."
+variable "model_provider" {
+  description = "AGENT_MODEL_PROVIDER for the API pods. gemini or bedrock only — Ollama is not reachable from inside the cluster."
   type        = string
-  default     = "16"
+  default     = "gemini"
+
+  validation {
+    condition     = contains(["gemini", "bedrock"], var.model_provider)
+    error_message = "model_provider must be gemini or bedrock (Ollama is not reachable from inside the cluster)."
+  }
 }
 
-variable "db_instance_class" {
-  description = "RDS instance class (postgres module)."
+variable "bedrock_model_id" {
+  description = "BEDROCK_MODEL_ID for the API pods (Bedrock chat model)."
   type        = string
-  default     = "db.t4g.micro"
+  default     = "us.anthropic.claude-sonnet-5-5"
 }
 
-variable "db_allocated_storage" {
-  description = "RDS allocated storage in GB (postgres module)."
-  type        = number
-  default     = 20
+variable "bedrock_embed_model" {
+  description = "BEDROCK_EMBED_MODEL for the API pods (Bedrock embedding model)."
+  type        = string
+  default     = "amazon.titan-embed-text-v2:0"
 }
 
-variable "db_multi_az" {
-  description = "Multi-AZ RDS deployment (postgres module). Off by default for cost; set true for production."
+variable "enable_bedrock_invoke" {
+  description = "Grant the API pods' IRSA role bedrock:InvokeModel. Enable when model_provider is bedrock (credentials then come from the role, no key in env). Enforced by a precondition in main.tf: bedrock + this flag false fails the plan instead of failing at runtime."
   type        = bool
   default     = false
 }
 
-variable "backup_retention_period" {
-  description = "RDS automated backup retention in days (postgres module)."
-  type        = number
-  default     = 7
+variable "bedrock_model_arns" {
+  description = "Explicit ARNs for the Bedrock invoke policy. Null (default) computes scoped ARNs for bedrock_model_id / bedrock_embed_model in both foundation-model and inference-profile forms. Set this explicitly when using model IDs whose ARN form the computation cannot guess (e.g. a provisioned-throughput ARN). Never \"*\": the iam module's empty default is fail-closed."
+  type        = list(string)
+  default     = null
 }
+
+# --- ECR tuning knobs (m-20): same pass-throughs as the Lambda stack,
+# so both stacks stay consistent. Defaults match the previous behavior.
 
 variable "ecr_force_delete" {
   description = "Allow deleting non-empty ECR repositories (ecr module, api + ui). True is a dev default; set false for production."
@@ -101,66 +92,6 @@ variable "ecr_keep_image_count" {
   description = "Images kept by the ECR lifecycle policy — the rollback window in deploys (ecr module, api + ui)."
   type        = number
   default     = 30
-}
-
-variable "node_instance_types" {
-  description = "EC2 instance types for the managed node group."
-  type        = list(string)
-  default     = ["t3.medium"]
-}
-
-variable "node_desired_size" {
-  description = "Desired node count."
-  type        = number
-  default     = 2
-}
-
-variable "node_min_size" {
-  description = "Minimum node count."
-  type        = number
-  default     = 1
-}
-
-variable "node_max_size" {
-  description = "Maximum node count."
-  type        = number
-  default     = 3
-}
-
-variable "node_disk_size" {
-  description = "Node root disk size in GB."
-  type        = number
-  default     = 20
-}
-
-variable "db_password" {
-  description = "RDS master password. Sensitive — pass via TF_VAR_db_password, never a default or a committed value."
-  type        = string
-  sensitive   = true
-}
-
-variable "db_username" {
-  description = "RDS master username."
-  type        = string
-  default     = "agent"
-}
-
-variable "db_name" {
-  description = "RDS database name."
-  type        = string
-  default     = "agentdb"
-}
-
-variable "deletion_protection" {
-  description = "RDS deletion protection. Off by default so dev stacks tear down cleanly; set true for production."
-  type        = bool
-  default     = false
-}
-
-variable "skip_final_snapshot" {
-  description = "Skip a final RDS snapshot on destroy. True by default for dev; set false for production so destroy keeps a final snapshot."
-  type        = bool
-  default     = true
 }
 
 variable "tags" {

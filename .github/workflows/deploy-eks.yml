@@ -3,8 +3,17 @@
 # runs without AWS, and the plan job fails at the OIDC auth step until
 # the role exists (see deploy/terraform/README.md for the prerequisites).
 # The workload stays defined by deploy/k8s/ — this workflow only
-# substitutes the ECR image URLs, the provider, the Ingress host, and
-# the Secret values, then applies.
+# substitutes the ECR image URLs, the provider, the Ingress host, the
+# IRSA role ARN (into the ServiceAccount), and the Secret values, then
+# applies.
+#
+# The cluster is PRE-EXISTING: the EKS stack takes its name from the
+# EKS_CLUSTER_NAME repo variable and creates no cluster, VPC, or RDS.
+# Set EKS_CLUSTER_NAME (Settings -> Secrets and variables -> Actions)
+# to the existing cluster's name before the first run; an empty value
+# fails the plan at the stack's cluster_name validation. Postgres
+# likewise pre-exists: its DSN comes from the TF_VAR_postgres_dsn
+# secret (the stack's postgres_dsn input), not from any RDS output.
 #
 # Flow: plan job (bootstrap ECR -> build+push images -> terraform plan,
 # plan saved as an artifact) -> apply job (gated by the `deploy-eks`
@@ -50,9 +59,7 @@ jobs:
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       PROJECT_NAME: ${{ vars.PROJECT_NAME || 'agent-data-platform' }}
       ENVIRONMENT: ${{ vars.ENVIRONMENT || 'dev' }}
-      TF_VAR_db_password: ${{ secrets.TF_VAR_db_password }}
-      TF_VAR_gemini_api_key: ${{ secrets.TF_VAR_gemini_api_key }}
-      TF_VAR_data_connections: ${{ secrets.TF_VAR_data_connections }}
+      TF_VAR_postgres_dsn: ${{ secrets.TF_VAR_postgres_dsn }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -123,12 +130,25 @@ jobs:
 
       - name: Terraform plan (EKS stack)
         working-directory: deploy/terraform/stacks/aws-eks
+        env:
+          MODEL_PROVIDER: ${{ vars.MODEL_PROVIDER }}
         run: |
-          export TF_VAR_data_connections="${TF_VAR_data_connections:-{}}"
+          MODEL_PROVIDER="${MODEL_PROVIDER:-gemini}"
+          # Array, not a bare string: an unquoted $EXTRA_VARS splits on
+          # whitespace, and a quoted "$EXTRA_VARS" would pass an empty
+          # argument to terraform when the provider is not bedrock
+          # (same pattern as deploy-lambda.yml).
+          EXTRA_VARS=()
+          if [ "$MODEL_PROVIDER" = "bedrock" ]; then
+            EXTRA_VARS=(-var=enable_bedrock_invoke=true)
+          fi
           terraform init -input=false
           terraform plan -input=false -out=tfplan \
             -var="project=${{ env.PROJECT_NAME }}" \
-            -var="environment=${{ env.ENVIRONMENT }}"
+            -var="environment=${{ env.ENVIRONMENT }}" \
+            -var="cluster_name=${{ vars.EKS_CLUSTER_NAME }}" \
+            -var="model_provider=$MODEL_PROVIDER" \
+            "${EXTRA_VARS[@]}"
 
       - name: Upload plan artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -151,7 +171,6 @@ jobs:
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       PROJECT_NAME: ${{ vars.PROJECT_NAME || 'agent-data-platform' }}
       ENVIRONMENT: ${{ vars.ENVIRONMENT || 'dev' }}
-      TF_VAR_db_password: ${{ secrets.TF_VAR_db_password }}
       TF_VAR_gemini_api_key: ${{ secrets.TF_VAR_gemini_api_key }}
       TF_VAR_data_connections: ${{ secrets.TF_VAR_data_connections }}
       # Ingress host for deploy/k8s/ingress.yaml. Set the INGRESS_HOST
@@ -174,10 +193,13 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       # m-26: kubectl was unpinned (whatever setup-kubectl defaults to).
-      # Pin it to the cluster minor: the EKS stack's cluster_version
-      # default is 1.36, and kubectl skew policy wants the client
-      # within one minor of the server. Bump this together with
-      # cluster_version in deploy/terraform/stacks/aws-eks/variables.tf.
+      # Pin it to the EXISTING cluster's minor: the EKS stack creates
+      # no cluster, so there is no cluster_version variable to bump
+      # together with this — check the cluster version first
+      # (aws eks describe-cluster --name <cluster> --query
+      # cluster.version) and keep this pin on the same minor (kubectl
+      # skew policy wants the client within one minor of the server).
+      # The current pin assumes a 1.36 cluster.
       - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
         with:
           version: "v1.36.0"
@@ -213,8 +235,9 @@ jobs:
           REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
           API_IMAGE="$REGISTRY/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-eks-api:${{ github.sha }}"
           UI_IMAGE="$REGISTRY/${{ env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}-eks-ui:${{ github.sha }}"
-          DSN=$(terraform output -raw rds_dsn)
+          DSN=$(terraform output -raw postgres_dsn)
           echo "::add-mask::$DSN"
+          IRSA_ROLE_ARN=$(terraform output -raw irsa_role_arn)
           # m-31: mask the other secrets this step handles, not just
           # the computed DSN — a verbose kubectl failure could otherwise
           # print them. (GitHub auto-masks registered secrets verbatim,
@@ -228,20 +251,26 @@ jobs:
           sed -i "s|AGENT_MODEL_PROVIDER: \"ollama\"|AGENT_MODEL_PROVIDER: \"$MODEL_PROVIDER\"|" /tmp/k8s-deploy/configmap.yaml
           sed -i "s|^  AWS_REGION: .*|  AWS_REGION: \"${{ env.AWS_REGION }}\"|" /tmp/k8s-deploy/configmap.yaml
           sed -i "s|host: agent-platform.example.com|host: $INGRESS_HOST|" /tmp/k8s-deploy/ingress.yaml
+          sed -i "s|REPLACE-WITH-IRSA-ROLE-ARN|$IRSA_ROLE_ARN|" /tmp/k8s-deploy/serviceaccount.yaml
           # m-25: the Secret is created BEFORE the Deployments. Pods
           # reference it via secretKeyRef, so applying Deployments
           # first left them in CreateContainerConfigError until the
           # Secret appeared seconds later.
           kubectl apply -f /tmp/k8s-deploy/namespace.yaml
+          # The ServiceAccount goes on before the Deployments too: the
+          # API Deployment runs as it (serviceAccountName: agent-api),
+          # and pods fail to start if it does not exist yet.
+          kubectl apply -f /tmp/k8s-deploy/serviceaccount.yaml
           kubectl -n agent-platform create secret generic agent-platform-secrets \
             --from-literal=POSTGRES_DSN="$DSN" \
             --from-literal=DATA_CONNECTIONS="${TF_VAR_data_connections:-{}}" \
             --from-literal=GEMINI_API_KEY="${TF_VAR_gemini_api_key:-}" \
             --dry-run=client -o yaml | kubectl apply -f -
-          # The in-cluster Postgres StatefulSet is NOT applied: RDS (from
-          # Terraform) is the conversation store. The placeholder Secret
-          # template is NOT applied either: the real Secret above
-          # replaces it.
+          # The in-cluster Postgres StatefulSet is NOT applied:
+          # Postgres already exists outside this stack (its DSN came
+          # from the postgres_dsn stack input above). The placeholder
+          # Secret template is NOT applied either: the real Secret
+          # above replaces it.
           kubectl apply -f /tmp/k8s-deploy/configmap.yaml \
                         -f /tmp/k8s-deploy/api-deployment.yaml \
                         -f /tmp/k8s-deploy/ui-deployment.yaml \

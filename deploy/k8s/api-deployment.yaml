@@ -17,6 +17,12 @@ spec:
       labels:
         app: agent-api
     spec:
+      # IRSA: the API pods run as this ServiceAccount so they assume
+      # the Terraform-managed role (Bedrock invoke). See
+      # serviceaccount.yaml — the deploy-eks pipeline annotates it
+      # with the role ARN. On a cluster without IRSA (kind, standalone
+      # dev) the account is just an identity with no AWS role.
+      serviceAccountName: agent-api
       # Matches the image's non-root user (Dockerfile creates appuser
       # UID 10001 and chowns /app to it).
       securityContext:
