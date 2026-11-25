@@ -129,6 +129,9 @@ kind load docker-image agent-data-platform:latest agent-ui:latest \
 
 # 3. Tenant + secrets. Edit deploy/k8s/configmap.yaml: set AUTH_ISSUER /
 #    AUTH_AUDIENCE to your tenant (placeholders are example.okta.com).
+#    The namespace first: the Secret needs it to exist (step 5 applies
+#    it again, harmlessly).
+kubectl apply -f deploy/k8s/namespace.yaml
 #    Then the Secret — the in-cluster Postgres user/password are both
 #    `agent` (see postgres-statefulset.yaml; dev only, never prod).
 kubectl -n agent-platform create secret generic agent-platform-secrets \
