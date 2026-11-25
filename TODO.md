@@ -207,6 +207,11 @@ can move.
   is built (2026-11-25, app-only stack). No longer applicable as
   Terraform items: EKS RDS ingress (the EKS stack provisions no RDS)
   and the EKS public API endpoint (no longer Terraform-managed).
+- **k8s secrets via External Secrets Operator + AWS Secrets Manager**
+  (deferred 2026-11-25, Rahul: "not for now, maybe for future") —
+  syncs into `agent-platform-secrets`; the Deployment already reads
+  that name; kind/local keeps the hand-created Secret. Revisit only
+  if he re-raises it.
 - **True incremental chat streaming on Lambda** — Mangum buffers the whole
   response, so `/api/chat` on Lambda returns one complete SSE document,
   not incremental tokens. True streaming needs a Function URL in
