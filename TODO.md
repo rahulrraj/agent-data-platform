@@ -166,15 +166,14 @@ can move.
   picked — either a deploy step in the pipeline or a call to the
   per-platform deploy workflow.
 - **Push and merge** — remote `feature/initial-platform` tip is
-  `f52c114` (pushed 2026-11-06, verified). Local-only since then:
-  `467068a` (local run guide: no containers / containers / kind),
-  `6e0bdba` (no-decision review batch), pipeline workflow
-  (`.github/workflows/pipeline.yml`, stage 1 tests + stage 2 ECR
-  build, stage 3 placeholder).
-  Nothing pushed since; push on Rahul's word via the connector API
-  script `~/workspace/gh_api_push.py` (git HTTPS cannot use the vault
-  credential). PAT expires Nov 15, 2026 — extend before it lapses or
-  pushing breaks. Merging the branch is Rahul's later call.
+  `55a7c2c` (pushed 2026-11-25, verified — all 4 commits replayed
+  with identical SHAs: local run guide, TODO note, no-decision
+  review batch, pipeline workflow). Note: the push worked with the
+  stored credential, so the Nov 15 PAT-expiry warning is stale —
+  the credential is valid as of 2026-11-25. Push on Rahul's word
+  via the connector API script `~/workspace/gh_api_push.py` (git
+  HTTPS cannot use the vault credential). Merging the branch is
+  Rahul's later call.
 
 ## Capabilities and guardrails
 
