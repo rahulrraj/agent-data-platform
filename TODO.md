@@ -237,7 +237,9 @@ can move.
   `376268c` (run guide: namespace before the Secret in the kind
   path), `bbd3c72` (TODO note), `ddce188` (per-user history +
   relevance-based history window), `2b8abb7` (EKS stack app-only),
-  `9eaf0cb` (GitLab CI). Docs reorg into book form (item 4) still
+  `9eaf0cb` (GitLab CI), `dd48ecc` (TODO note), `999f77e` (TODO:
+  deferred External Secrets Operator), `2a75ddc` (capability
+  description overrides). Docs reorg into book form (item 4) still
   in progress, uncommitted. Note: the push worked with the stored
   credential, so the Nov 15 PAT-expiry warning is stale — the
   credential is valid as of 2026-11-25. Push on Rahul's word via
