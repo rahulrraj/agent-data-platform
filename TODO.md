@@ -144,6 +144,22 @@ can move.
   comments); the `sub` claim format is the documented default,
   unconfirmed against a real token.
 
+- Docs reorganized into book form (2026-11-25): root README +
+  `doc/README.md` index in 6 parts (what it is → architecture →
+  running locally → building on it → deploying → reference);
+  intro + diagrams kept, ADRs unrenumbered appendix,
+  developer-guide stays the contributor handbook. Terraform docs
+  now describe the app-only EKS stack (existing cluster +
+  Postgres as inputs; creates ECR, OIDC provider, IRSA role)
+  including the state-migration hazard and the GitLab CI setup;
+  per-user history (`GET /api/sessions`) and the relevance-based
+  history window corrected wherever docs stated the old behavior;
+  k8s README + run-locally step 5 gain `serviceaccount.yaml`
+  before `api-deployment.yaml`; `src/ui` README history section
+  corrected. Anchor check over all 295 doc links: 0 broken (one
+  pre-existing placeholder link in the frozen 2026-10-24 review
+  left alone).
+
 ## Live tests and verification
 
 - **Per-user sessions list against live Postgres** — the
@@ -239,8 +255,8 @@ can move.
   relevance-based history window), `2b8abb7` (EKS stack app-only),
   `9eaf0cb` (GitLab CI), `dd48ecc` (TODO note), `999f77e` (TODO:
   deferred External Secrets Operator), `2a75ddc` (capability
-  description overrides). Docs reorg into book form (item 4) still
-  in progress, uncommitted. Note: the push worked with the stored
+  description overrides), `458774e` (TODO note), `e287bb7` (docs
+  reorganized into book form). Note: the push worked with the stored
   credential, so the Nov 15 PAT-expiry warning is stale — the
   credential is valid as of 2026-11-25. Push on Rahul's word via
   the connector API script `~/workspace/gh_api_push.py` (git
