@@ -34,6 +34,26 @@ can move.
   backend suite 540 passed / 4 skipped, eval set 12/12. Local-only;
   see the push entry below.
 
+- Local container stack (2026-11-25): `deploy/local/` — `run.sh`
+  (build/up/down) + `front-door.conf` + README, reconstructed from
+  Rahul's working 2026-11-24 run on his laptop (his values replaced by
+  env vars; nothing secret in the repo). Base images from ECR Public
+  (Docker Hub 429s on this VM); front door logs no query strings (the
+  Okta code never hits the log) and disables buffering with a 900s
+  read timeout for `/api/chat`. README "Run with Docker" section
+  added. Closes the "no local container run docs" gap from the
+  2026-11-06 review's deployment findings.
+
+- Local run guide, three ways (2026-11-25): `doc/run-locally.md` —
+  no containers (venv + Vite dev server), containers
+  (`deploy/local/`), Kubernetes (kind + ingress-nginx + self-signed
+  TLS). k8s path written from the manifests, NOT yet run end to end
+  (no cluster on this VM); its unverified steps are marked in the
+  guide. Supporting changes: `deploy/local/kind-config.yaml` (host
+  80/443 mappings); `AUTH_ISSUER`/`AUTH_AUDIENCE` placeholders added
+  to `deploy/k8s/configmap.yaml` — the manifests previously wired no
+  auth at all, so pods would fail closed on startup.
+
 ## Live tests and verification
 
 - **Bedrock live 3-hop test** — blocked: needs Rahul's AWS credentials in
@@ -65,15 +85,13 @@ can move.
 - **`nomic-embed-text` install for live Ollama discovery** — Ollama
   capability discovery is test-only today (deterministic fake embeddings);
   the real embedding model is not installed in Rahul's Ollama.
-- **Live Okta verification (auth, ADR 0008)** — the implementation is
-  unit-tested only (locally generated keys, stubbed JWKS). Still
-  unverified against a real Okta tenant: live login redirect +
-  callback, real discovery document and JWKS-backed tokens through the
-  composed app, refresh-token issuance/rotation and silent renewal,
-  the registered redirect URI working end to end, and the Function
-  URL `NONE` + CloudFront + WAF front-door interplay. Needs Rahul's
-  Okta tenant (issuer, client id, redirect URI registered) and a run
-  of the UI + API against it. Cannot be done from this VM.
+- **Live Okta verification (auth, ADR 0008)** — partly verified by
+  Rahul's local container run (2026-11-24, `deploy/local/`): live login
+  redirect + callback, real discovery document and JWKS-backed tokens
+  through the composed app, and the registered redirect URI working end
+  to end — login + chat worked. Still unverified: refresh-token
+  issuance/rotation and silent renewal, and the Function URL `NONE` +
+  CloudFront + WAF front-door interplay. Cannot be done from this VM.
 
 ## Deployment and infrastructure
 

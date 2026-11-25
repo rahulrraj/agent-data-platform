@@ -17,6 +17,7 @@ including organization data discovered by meaning from the capability registry.
 - [Resilience](#resilience)
 - [Observability (OTLP tracing and metrics, ADR 0009)](#observability-otlp-tracing-and-metrics-adr-0009)
 - [Run it](#run-it)
+- [Run with Docker (local containers)](#run-with-docker-local-containers)
 - [Web UI](#web-ui)
 - [Deploy on Kubernetes](#deploy-on-kubernetes)
 - [Run on AWS Lambda](#run-on-aws-lambda)
@@ -257,6 +258,28 @@ curl -X POST localhost:8000/api/ask \
   -H 'Content-Type: application/json' \
   -d '{"message": "What is 6 * 7? Use the calculate tool.", "session_id": "demo"}'
 ```
+
+## Run with Docker (local containers)
+
+Three containers on one Docker network — API, UI, and an nginx front
+door — with Okta login working end to end:
+
+```bash
+export AWS_PROFILE=<your SSO profile>
+export AUTH_ISSUER=https://<tenant>.oktapreview.com/oauth2/<auth-server-id>
+export AUTH_AUDIENCE=api://<your api audience>
+export VITE_OIDC_ISSUER="$AUTH_ISSUER"
+export VITE_OIDC_CLIENT_ID=<the Okta SPA app's client id>
+
+deploy/local/run.sh build
+deploy/local/run.sh up      # UI at http://localhost:8501
+deploy/local/run.sh down
+```
+
+Full settings, notes, and what the local run does and does not prove:
+[`deploy/local/README.md`](deploy/local/README.md). For the other ways
+to run locally — no containers, or Kubernetes (kind) — see
+[`doc/run-locally.md`](doc/run-locally.md).
 
 ## Web UI
 

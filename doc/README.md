@@ -67,6 +67,8 @@ carries its own `Contents` section at the top.
 | --- | --- |
 | [`../src/ui/README.md`](../src/ui/README.md) | React chat UI: run it, auth, deployment wiring, history model, tests, layout |
 | [`../deploy/terraform/README.md`](../deploy/terraform/README.md) | Terraform stacks (Lambda + EKS), state backend, pipelines/OIDC, first deployment, known follow-ups |
+| [`../deploy/local/README.md`](../deploy/local/README.md) | Local three-container stack (API + UI + nginx front door), Okta login end to end |
+| [`run-locally.md`](run-locally.md) | Run it locally, three ways: no containers, containers, Kubernetes (kind) |
 
 ## Review record
 

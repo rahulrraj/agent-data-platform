@@ -17,6 +17,15 @@ data:
   # credentials. The correct pattern is IRSA (OIDC provider +
   # service-account role), which is a known follow-up, NOT built here.
   AWS_REGION: "us-east-1"
+  # OIDC auth (ADR 0008, fail-closed): the API refuses to start without
+  # an issuer + audience, or an explicit AUTH_DISABLED=true for local
+  # development. These are public identifiers, not secrets — they belong
+  # here, not in the Secret. Set them to your tenant before applying;
+  # the committed values are placeholders (example.okta.com is not a
+  # real tenant). For a no-auth local cluster, replace both lines with
+  # AUTH_DISABLED: "true" instead — never set both at once.
+  AUTH_ISSUER: "https://example.okta.com/oauth2/default"
+  AUTH_AUDIENCE: "api://agent-platform"
   # Point at an in-cluster Ollama, or an external host. The API must reach it.
   OLLAMA_HOST: "http://ollama:11434"
   OLLAMA_MODEL: "qwen2.5:1.5b"
