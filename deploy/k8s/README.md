@@ -93,7 +93,11 @@ Postgres StatefulSet and the placeholder Secret.
   `POSTGRES_DSN` at the managed instance.
 - **Ollama**: `OLLAMA_HOST` defaults to `http://ollama:11434` (in-cluster).
   Run Ollama in the cluster or point it at an external host. For Gemini,
-  set `AGENT_MODEL_PROVIDER=gemini` and `GEMINI_API_KEY`.
+  set `AGENT_MODEL_PROVIDER=gemini` and `GEMINI_API_KEY`. For Bedrock
+  (Sonnet), set `AGENT_MODEL_PROVIDER=bedrock` and put short-lived
+  `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`
+  in `agent-platform-secrets` (kind/dev only — EKS uses IRSA instead;
+  see Way 3 in `doc/run-locally.md`).
 - **Embedding cache**: each API pod keeps its own `embedding_cache.db`
   (emptyDir). It's a cache — cold pods re-embed on first discovery, then
   share nothing. At thousands of capabilities this is fine; the vectors

@@ -16,6 +16,8 @@ data:
   # NOTE: a region alone grants no Bedrock access — pods still need
   # credentials. The correct pattern is IRSA (OIDC provider +
   # service-account role), which is a known follow-up, NOT built here.
+  # On kind (no IRSA) pass short-lived keys via the Secret instead —
+  # see doc/run-locally.md Way 3.
   AWS_REGION: "us-east-1"
   # OIDC auth (ADR 0008, fail-closed): the API refuses to start without
   # an issuer + audience, or an explicit AUTH_DISABLED=true for local

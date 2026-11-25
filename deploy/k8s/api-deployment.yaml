@@ -59,6 +59,29 @@ spec:
                 secretKeyRef:
                   name: agent-platform-secrets
                   key: GEMINI_API_KEY
+            # Bedrock (kind/dev only — EKS uses IRSA instead): short-lived
+            # keys from the SSO profile, set in the Secret by Way 3 of
+            # doc/run-locally.md. Optional refs: the pods start without
+            # them, but Bedrock calls (chat + Titan embeddings) fail
+            # until they are present. boto3 reads all three from env.
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: agent-platform-secrets
+                  key: AWS_ACCESS_KEY_ID
+                  optional: true
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agent-platform-secrets
+                  key: AWS_SECRET_ACCESS_KEY
+                  optional: true
+            - name: AWS_SESSION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: agent-platform-secrets
+                  key: AWS_SESSION_TOKEN
+                  optional: true
           livenessProbe:
             httpGet:
               path: /api/health

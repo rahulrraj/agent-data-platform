@@ -128,16 +128,28 @@ kind load docker-image agent-data-platform:latest agent-ui:latest \
   --name agent-platform
 
 # 3. Tenant + secrets. Edit deploy/k8s/configmap.yaml: set AUTH_ISSUER /
-#    AUTH_AUDIENCE to your tenant (placeholders are example.okta.com).
+#    AUTH_AUDIENCE to your tenant (placeholders are example.okta.com),
+#    and AGENT_MODEL_PROVIDER to "bedrock" (Sonnet; the default ollama
+#    has no server in this cluster, and the API pods stay not-ready
+#    without a model backend — readiness pings the model and the
+#    embeddings). AWS_REGION is already us-east-1 there.
 #    The namespace first: the Secret needs it to exist (step 5 applies
 #    it again, harmlessly).
 kubectl apply -f deploy/k8s/namespace.yaml
 #    Then the Secret — the in-cluster Postgres user/password are both
 #    `agent` (see postgres-statefulset.yaml; dev only, never prod).
+#    Bedrock needs short-lived keys from your SSO profile (same source
+#    as the container run); they expire, so re-run this command and
+#    `kubectl -n agent-platform rollout restart deployment/agent-api`
+#    when Bedrock calls start failing. Never commit these values.
+eval "$(aws configure export-credentials --profile <your-sso-profile> --format env-no-export)"
 kubectl -n agent-platform create secret generic agent-platform-secrets \
   --from-literal=POSTGRES_DSN='postgres://agent:agent@postgres:5432/agentdb' \
   --from-literal=DATA_CONNECTIONS='{}' \
   --from-literal=GEMINI_API_KEY='' \
+  --from-literal=AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+  --from-literal=AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+  --from-literal=AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # 4. TLS (self-signed — Okta accepts only https redirect URIs for
