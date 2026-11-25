@@ -14,7 +14,10 @@ from contextlib import closing
 from pathlib import Path
 
 from agent_api.domain.conversation import Conversation, ToolResult, Turn
-from agent_api.ports.conversation_repository import ConversationRepositoryError
+from agent_api.ports.conversation_repository import (
+    ConversationRepositoryError,
+    SessionSummary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -173,3 +176,51 @@ class SqliteConversationRepository:
             raise
         except Exception as exc:  # noqa: BLE001
             raise ConversationRepositoryError(f"sqlite store ping failed: {exc}") from exc
+
+    @staticmethod
+    def _owner_of(turns_json: str | None) -> str | None:
+        """The owner bound in a row, or None for legacy/unowned rows.
+
+        Only the envelope's owner is read — the turns are never parsed
+        for a listing. A corrupt row yields None (it lists in dev mode
+        and is invisible to authenticated callers, like any unowned
+        row); load() is what logs and recovers it.
+        """
+        if not turns_json:
+            return None
+        try:
+            document = json.loads(turns_json)
+        except ValueError:
+            return None
+        if isinstance(document, dict):
+            owner = document.get("owner")
+            return owner if isinstance(owner, str) else None
+        return None
+
+    def list_sessions(self, owner: str | None) -> list[SessionSummary]:
+        # The table carries no updated_at column, so summaries carry
+        # None there (the port documents that). Ownership is filtered
+        # in Python rather than via json_extract(): the JSON1
+        # functions are not guaranteed in every bundled SQLite, and
+        # the row count here is bounded by MAX_SESSIONS-scale usage.
+        try:
+            with closing(self._connect()) as conn:
+                rows = conn.execute(
+                    "SELECT id, turns_json FROM conversations"
+                ).fetchall()
+            summaries: list[SessionSummary] = []
+            for row_id, turns_json in rows:
+                if row_id == _PROBE_ID:
+                    continue
+                row_owner = self._owner_of(turns_json)
+                if owner is None or row_owner == owner:
+                    summaries.append(
+                        SessionSummary(id=row_id, owner=row_owner)
+                    )
+            return summaries
+        except ConversationRepositoryError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise ConversationRepositoryError(
+                f"sqlite store list failed: {exc}"
+            ) from exc

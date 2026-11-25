@@ -144,3 +144,48 @@ def test_legacy_bare_list_row_loads_with_no_owner(tmp_path):
     loaded.owner = "alice"
     repo.save(loaded)
     assert repo.load("old-session").owner == "alice"
+
+
+# --- per-user history: list_sessions ---
+
+def _seed_list(repo):
+    for sid, owner in (("a", "alice"), ("b", "bob"), ("c", None)):
+        conv = Conversation(id=sid, owner=owner)
+        conv.add_user("hi")
+        repo.save(conv)
+
+
+def test_list_sessions_returns_only_own(repo):
+    _seed_list(repo)
+    assert [(s.id, s.owner) for s in repo.list_sessions("alice")] == [
+        ("a", "alice")
+    ]
+    assert [s.id for s in repo.list_sessions("bob")] == ["b"]
+    assert repo.list_sessions("carol") == []
+
+
+def test_list_sessions_dev_mode_lists_all_including_unowned(repo):
+    _seed_list(repo)
+    assert sorted(s.id for s in repo.list_sessions(None)) == ["a", "b", "c"]
+    # No updated_at column in this store: summaries carry None.
+    assert all(s.updated_at is None for s in repo.list_sessions(None))
+
+
+def test_list_sessions_legacy_row_lists_in_dev_only(tmp_path):
+    import json
+    import sqlite3
+
+    repo = SqliteConversationRepository(str(tmp_path / "legacy-list.db"))
+    _seed_list(repo)
+    legacy = json.dumps([{"role": "user", "content": "old", "tool_uses": []}])
+    with sqlite3.connect(str(tmp_path / "legacy-list.db")) as conn:
+        conn.execute(
+            "INSERT INTO conversations (id, turns_json) VALUES (?, ?)",
+            ("old-session", legacy),
+        )
+        conn.commit()
+    # Dev mode lists the ownerless legacy row; an authenticated
+    # caller never sees it (unclaimed) or anyone else's sessions.
+    assert "old-session" in [s.id for s in repo.list_sessions(None)]
+    assert "old-session" not in [s.id for s in repo.list_sessions("alice")]
+    assert [s.id for s in repo.list_sessions("alice")] == ["a"]

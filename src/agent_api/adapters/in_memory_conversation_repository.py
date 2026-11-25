@@ -7,7 +7,10 @@ without touching the service — that is the point of the port.
 from __future__ import annotations
 
 from agent_api.domain.conversation import Conversation
-from agent_api.ports.conversation_repository import ConversationRepositoryError
+from agent_api.ports.conversation_repository import (
+    ConversationRepositoryError,
+    SessionSummary,
+)
 
 
 class InMemoryConversationRepository:
@@ -35,3 +38,17 @@ class InMemoryConversationRepository:
     def ping(self) -> None:
         # Process-local dict: nothing to check.
         return None
+
+    def list_sessions(self, owner: str | None) -> list[SessionSummary]:
+        try:
+            return [
+                SessionSummary(id=conv.id, owner=conv.owner)
+                for conv in self._store.values()
+                if owner is None or conv.owner == owner
+            ]
+        except ConversationRepositoryError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise ConversationRepositoryError(
+                f"memory store list failed: {exc}"
+            ) from exc

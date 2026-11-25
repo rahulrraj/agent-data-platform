@@ -24,6 +24,7 @@ class FakeCursor:
     def __init__(self, conn):
         self._conn = conn
         self._row = None
+        self._rows: list = []
 
     def execute(self, sql, params=None):
         self._conn.statements.append((sql, params))
@@ -32,12 +33,31 @@ class FakeCursor:
             # emulate psycopg returning JSONB as native Python objects
             stored = self._conn.data.get(params[0])
             self._row = (json.loads(stored),) if stored is not None else None
+        elif normalized.startswith("SELECT ID"):
+            # list_sessions: WHERE (%s IS NULL OR turns_json->>'owner' = %s)
+            owner = params[0] if params else None
+            rows = []
+            for sid, stored in self._conn.data.items():
+                if sid == "__readiness_probe__":
+                    continue
+                document = json.loads(stored)
+                row_owner = (
+                    document.get("owner")
+                    if isinstance(document, dict)
+                    else None
+                )
+                if owner is None or row_owner == owner:
+                    rows.append((sid, row_owner, None))
+            self._rows = rows
         elif normalized.startswith("INSERT"):
             self._conn.data[params[0]] = params[1]
         return self
 
     def fetchone(self):
         return self._row
+
+    def fetchall(self):
+        return self._rows
 
 
 class FakeConn:
@@ -120,6 +140,8 @@ def test_schema_created_on_init(fake_pg):
     ddl = " ".join(sql for sql, _ in fake_pg.conn.statements)
     assert "CREATE TABLE IF NOT EXISTS conversations" in ddl
     assert "JSONB" in ddl
+    assert "conversations_owner_idx" in ddl
+    assert "turns_json->>'owner'" in ddl
 
 
 def test_empty_dsn_raises(fake_pg):
@@ -201,3 +223,47 @@ def test_envelope_loads_owner(fake_pg):
         {"owner": "bob", "turns": [{"role": "user", "content": "hi"}]},
     )
     assert loaded.owner == "bob"
+
+
+# --- per-user history: list_sessions ---
+
+def _seed_list(repo):
+    for sid, owner in (("a", "alice"), ("b", "bob"), ("c", None)):
+        conv = Conversation(id=sid, owner=owner)
+        conv.add_user("hi")
+        repo.save(conv)
+
+
+def test_list_sessions_returns_only_own(fake_pg):
+    repo = PostgresConversationRepository("postgres://test")
+    _seed_list(repo)
+    assert [(s.id, s.owner) for s in repo.list_sessions("alice")] == [
+        ("a", "alice")
+    ]
+    assert [s.id for s in repo.list_sessions("bob")] == ["b"]
+    assert repo.list_sessions("carol") == []
+    # The filter runs in SQL on the JSONB envelope, not in Python.
+    list_sql = " ".join(
+        sql for sql, _ in fake_pg.conn.statements if "SELECT ID" in sql.upper()
+    )
+    assert "turns_json->>'owner'" in list_sql
+
+
+def test_list_sessions_dev_mode_lists_all_including_unowned(fake_pg):
+    repo = PostgresConversationRepository("postgres://test")
+    _seed_list(repo)
+    assert sorted(s.id for s in repo.list_sessions(None)) == ["a", "b", "c"]
+
+
+def test_list_sessions_legacy_bare_list_row_lists_in_dev_only(fake_pg):
+    repo = PostgresConversationRepository("postgres://test")
+    _seed_list(repo)
+    # A legacy bare-list row: psycopg returns JSONB natively, so the
+    # fake stores the dumped string and the adapter's SQL-side filter
+    # sees NULL for turns_json->>'owner'.
+    fake_pg.conn.data["old-session"] = json.dumps(
+        [{"role": "user", "content": "old", "tool_uses": []}]
+    )
+    assert "old-session" in [s.id for s in repo.list_sessions(None)]
+    assert "old-session" not in [s.id for s in repo.list_sessions("alice")]
+    assert [s.id for s in repo.list_sessions("alice")] == ["a"]

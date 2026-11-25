@@ -221,6 +221,33 @@ def create_app(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    @app.get("/api/sessions", dependencies=[Depends(_documented_bearer)])
+    def list_sessions(request: Request):
+        """List the caller's own sessions (per-user history).
+
+        Authenticated callers see only sessions bound to their
+        principal — never another principal's ids, never unowned
+        rows. In dev mode (no validator wired) every session lists.
+        Response: {"sessions": [{"id", "updated_at"}]}; updated_at
+        is an ISO-8601 string where the store tracks it, else null.
+        """
+        principal, _ = _authenticate(request, token_validator)
+        try:
+            summaries = service.list_sessions(principal=principal)
+        except AskAgentError as exc:
+            raise _to_http_error(exc) from exc
+        return {
+            "sessions": [
+                {
+                    "id": s.id,
+                    "updated_at": (
+                        s.updated_at.isoformat() if s.updated_at else None
+                    ),
+                }
+                for s in summaries
+            ]
+        }
+
     @app.delete("/api/sessions/{session_id}")
     def reset_session(session_id: str, request: Request):
         """Clear a session's history (fresh start for a bricked session)."""

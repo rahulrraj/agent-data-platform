@@ -12,7 +12,10 @@ import json
 import logging
 
 from agent_api.domain.conversation import Conversation, ToolResult, Turn
-from agent_api.ports.conversation_repository import ConversationRepositoryError
+from agent_api.ports.conversation_repository import (
+    ConversationRepositoryError,
+    SessionSummary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +24,9 @@ CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     turns_json JSONB NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-)
+);
+CREATE INDEX IF NOT EXISTS conversations_owner_idx
+    ON conversations ((turns_json->>'owner'))
 """
 
 
@@ -171,3 +176,32 @@ class PostgresConversationRepository:
             raise
         except Exception as exc:  # noqa: BLE001
             raise ConversationRepositoryError(f"postgres store ping failed: {exc}") from exc
+
+    def list_sessions(self, owner: str | None) -> list[SessionSummary]:
+        # Ownership lives in the JSONB envelope (turns_json->>'owner');
+        # legacy bare-list rows yield NULL there, so they list in dev
+        # mode and are invisible to authenticated callers, like any
+        # unowned row. The expression index on turns_json->>'owner'
+        # (created in _SCHEMA) serves the authenticated filter. The
+        # probe row is excluded: ping deletes it, but a crashed ping
+        # could leave it behind.
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT id, turns_json->>'owner' AS owner, updated_at "
+                    "FROM conversations "
+                    "WHERE id <> '__readiness_probe__' "
+                    "AND (%s IS NULL OR turns_json->>'owner' = %s) "
+                    "ORDER BY updated_at DESC",
+                    (owner, owner),
+                ).fetchall()
+            return [
+                SessionSummary(id=row_id, owner=row_owner, updated_at=updated_at)
+                for row_id, row_owner, updated_at in rows
+            ]
+        except ConversationRepositoryError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise ConversationRepositoryError(
+                f"postgres store list failed: {exc}"
+            ) from exc

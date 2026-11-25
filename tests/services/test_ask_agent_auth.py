@@ -62,6 +62,15 @@ class CopyingRepository:
             owner=conversation.owner,
         )
 
+    def list_sessions(self, owner):
+        from agent_api.ports.conversation_repository import SessionSummary
+
+        return [
+            SessionSummary(id=conv.id, owner=conv.owner)
+            for conv in self.store.values()
+            if owner is None or conv.owner == owner
+        ]
+
     def ping(self) -> None:
         return None
 
@@ -214,3 +223,50 @@ def test_gateway_handoff_copy_preserves_owner():
     service, gateway, _ = make_service()
     service.ask("s1", "hi", principal="alice")
     assert gateway.seen_conversations[0].owner == "alice"
+
+
+# --- per-user history: list_sessions ---
+
+def _seed_service_repo(repo):
+    for sid, owner in (("a", "alice"), ("b", "bob"), ("c", None)):
+        conv = Conversation(id=sid, owner=owner)
+        conv.add_user("hi")
+        repo.save(conv)
+
+
+def test_list_sessions_returns_only_own():
+    _, _, repo = make_service()
+    _seed_service_repo(repo)
+    service, _, _ = make_service(repo=repo)
+    assert [s.id for s in service.list_sessions(principal="alice")] == ["a"]
+    assert [s.id for s in service.list_sessions(principal="bob")] == ["b"]
+    assert service.list_sessions(principal="carol") == []
+
+
+def test_list_sessions_dev_mode_lists_all_including_unowned():
+    _, _, repo = make_service()
+    _seed_service_repo(repo)
+    service, _, _ = make_service(repo=repo)
+    assert sorted(s.id for s in service.list_sessions()) == ["a", "b", "c"]
+    assert sorted(s.id for s in service.list_sessions(principal=None)) == [
+        "a",
+        "b",
+        "c",
+    ]
+
+
+def test_list_sessions_store_failure_is_502():
+    from agent_api.ports.conversation_repository import (
+        ConversationRepositoryError,
+    )
+    from agent_api.services.ask_agent import AgentServiceError
+
+    _, _, repo = make_service()
+
+    def _boom(owner):
+        raise ConversationRepositoryError("store down")
+
+    repo.list_sessions = _boom
+    service, _, _ = make_service(repo=repo)
+    with pytest.raises(AgentServiceError, match="store down"):
+        service.list_sessions(principal="alice")

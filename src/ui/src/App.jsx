@@ -4,16 +4,17 @@ import Composer from "./components/Composer.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
 import { Message, Welcome } from "./components/Message.jsx";
 import { MenuIcon, MoonIcon, Sparkle, SunIcon } from "./components/icons.jsx";
-import { getHealth, getReadiness, streamChat } from "./api.js";
+import { getHealth, getReadiness, getSessions, streamChat } from "./api.js";
 import {
   clearTokens,
   getAuthConfig,
+  getCurrentPrincipal,
   getValidAccessToken,
   handleCallback,
   isAuthError,
   startLogin,
 } from "./auth.js";
-import { loadSessions, saveSessions } from "./sessions.js";
+import { loadSessions, reconcileSessions, saveSessions } from "./sessions.js";
 
 // M-28: collision-proof, unguessable ids. crypto.randomUUID() needs a
 // secure context (localhost / https); fall back only where it is absent.
@@ -41,7 +42,11 @@ export default function App() {
   // m-41(a)(b): sessions are loaded once, and the initial conversation
   // is the most recently *active* one (max updatedAt, matching the
   // sidebar's sort), not simply the first in stored order.
-  const [initialSessions] = useState(loadSessions);
+  // Per-user history: the initial load is scoped to the principal
+  // stored from a previous sign-in in this tab (null in dev mode =
+  // everything); the post-login reconcile below drops anything the
+  // server does not list for the current user.
+  const [initialSessions] = useState(() => loadSessions(getCurrentPrincipal()));
   const [sessions, setSessions] = useState(initialSessions);
   const [activeId, setActiveId] = useState(() => {
     let best = null;
@@ -79,6 +84,17 @@ export default function App() {
   const [loginBusy, setLoginBusy] = useState(false);
   const authInitRef = useRef(false);
   const abortRef = useRef(null);
+  // Per-user history: the signed-in principal (id_token `sub`, read
+  // from auth storage once authentication resolves; null in dev
+  // mode). Scopes local loads/saves and the server reconciliation,
+  // so one user never sees another user's local sessions.
+  const principalRef = useRef(null);
+  const reconcileRef = useRef(false);
+  const sessionsRef = useRef(initialSessions);
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
   // m-36: which session the in-flight stream belongs to, so the
   // finally block below can tell a stale stream from the current one.
   const streamingSidRef = useRef(null);
@@ -126,7 +142,7 @@ export default function App() {
     } else {
       lastSaveRef.current = Date.now();
     }
-    setStorageWarning(!saveSessions(sessions).ok);
+    setStorageWarning(!saveSessions(sessions, principalRef.current).ok);
   }, [sessions, streaming, authStatus]);
 
   // m-41(d): another tab editing history no longer silently loses to
@@ -135,7 +151,7 @@ export default function App() {
   useEffect(() => {
     const onStorage = (e) => {
       if (e.key !== "agent.sessions" || streamingRef.current) return;
-      const fresh = loadSessions();
+      const fresh = loadSessions(principalRef.current);
       setSessions(fresh);
       if (
         activeIdRef.current &&
@@ -164,6 +180,9 @@ export default function App() {
     (async () => {
       const config = getAuthConfig();
       if (config.authDisabled) {
+        // Dev mode: no identity — the server lists everything and
+        // local sessions stay unscoped, as before.
+        principalRef.current = null;
         setAuthStatus("authenticated");
         return;
       }
@@ -174,6 +193,7 @@ export default function App() {
       try {
         const cb = await handleCallback(config);
         if (cb.handled) {
+          principalRef.current = getCurrentPrincipal();
           setAuthStatus("authenticated");
           return;
         }
@@ -184,6 +204,7 @@ export default function App() {
       }
       try {
         const token = await getValidAccessToken(config);
+        if (token) principalRef.current = getCurrentPrincipal();
         setAuthStatus(token ? "authenticated" : "login");
       } catch {
         clearTokens();
@@ -191,6 +212,51 @@ export default function App() {
       }
     })();
   }, []);
+
+  // Per-user history: once per login, reconcile the local copy
+  // against the server's listing for this user (GET /api/sessions).
+  // Local sessions the server does not list — another user's
+  // sessions left in this browser, or ones deleted server-side —
+  // are dropped from view (and, via the save effect, from storage).
+  // A failed fetch leaves the local copy untouched: a transient
+  // outage must not wipe history. A 401 routes back to login.
+  useEffect(() => {
+    if (authStatus !== "authenticated") {
+      reconcileRef.current = false;
+      return undefined;
+    }
+    if (reconcileRef.current) return undefined;
+    reconcileRef.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await getSessions();
+        if (cancelled) return;
+        const reconciled = reconcileSessions(
+          sessionsRef.current,
+          data?.sessions,
+          principalRef.current
+        );
+        setSessions(reconciled);
+        if (
+          activeIdRef.current &&
+          !reconciled.some((s) => s.id === activeIdRef.current)
+        ) {
+          setActiveId(null);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        if (isAuthError(e)) {
+          clearTokens();
+          setAuthStatus("login");
+        }
+        // Any other failure: keep the local copy as-is.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus]);
 
   const handleLogin = useCallback(async () => {
     setLoginBusy(true);

@@ -67,6 +67,20 @@ class FakeService(AskAgentService):
         if self.error:
             raise self.error
 
+    def list_sessions(self, principal=None):
+        from agent_api.ports.conversation_repository import SessionSummary
+
+        self.calls.append(("list_sessions", principal))
+        if self.error:
+            raise self.error
+        if principal is None:
+            return [
+                SessionSummary(id="a", owner="alice"),
+                SessionSummary(id="b", owner="bob"),
+                SessionSummary(id="c", owner=None),
+            ]
+        return [SessionSummary(id="a", owner="alice")]
+
     def readiness(self):
         from agent_api.services.ask_agent import ReadinessReport
 
@@ -252,3 +266,67 @@ def test_bearer_scheme_is_case_insensitive():
         headers={"Authorization": f"bearer {TOKEN}"},
     )
     assert r.status_code == 200
+
+
+# --- GET /api/sessions: per-user history listing ---
+
+def test_list_sessions_requires_auth():
+    service = FakeService()
+    r = _client(service, FakeValidator()).get("/api/sessions")
+    assert r.status_code == 401
+    assert service.calls == []
+
+
+def test_list_sessions_returns_only_callers_sessions():
+    service = FakeService()
+    r = _authed_client(service).get(
+        "/api/sessions", headers={"Authorization": f"Bearer {TOKEN}"}
+    )
+    assert r.status_code == 200
+    assert service.calls == [("list_sessions", PRINCIPAL)]
+    assert r.json() == {
+        "sessions": [{"id": "a", "updated_at": None}],
+    }
+
+
+def test_list_sessions_dev_mode_returns_all():
+    # No validator wired: principal None, every session lists.
+    service = FakeService()
+    r = _client(service, None).get("/api/sessions")
+    assert r.status_code == 200
+    assert service.calls == [("list_sessions", None)]
+    assert [s["id"] for s in r.json()["sessions"]] == ["a", "b", "c"]
+
+
+def test_list_sessions_service_error_is_502():
+    from agent_api.services.ask_agent import AgentServiceError
+
+    service = FakeService(error=AgentServiceError("store down"))
+    r = _authed_client(service).get(
+        "/api/sessions", headers={"Authorization": f"Bearer {TOKEN}"}
+    )
+    assert r.status_code == 502
+
+
+def test_list_sessions_reports_updated_at_when_present():
+    from datetime import datetime, timezone
+
+    from agent_api.ports.conversation_repository import SessionSummary
+
+    class TimestampedService(FakeService):
+        def list_sessions(self, principal=None):
+            return [
+                SessionSummary(
+                    id="a",
+                    owner="alice",
+                    updated_at=datetime(2026, 11, 25, 13, 0, tzinfo=timezone.utc),
+                )
+            ]
+
+    r = _authed_client(TimestampedService()).get(
+        "/api/sessions", headers={"Authorization": f"Bearer {TOKEN}"}
+    )
+    assert r.status_code == 200
+    assert r.json() == {
+        "sessions": [{"id": "a", "updated_at": "2026-11-25T13:00:00+00:00"}],
+    }

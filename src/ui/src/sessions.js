@@ -28,6 +28,11 @@ export function validateSession(entry) {
             : [],
         }))
     : [];
+  // Per-user history: the owner (id_token `sub`) a local session was
+  // saved under. Kept only when it is a string, so entries written
+  // before scoping (no owner) keep their old shape exactly.
+  const owner =
+    typeof entry.owner === "string" && entry.owner ? entry.owner : null;
   return {
     id: entry.id,
     title:
@@ -36,6 +41,7 @@ export function validateSession(entry) {
         : "New conversation",
     messages,
     updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : 0,
+    ...(owner ? { owner } : {}),
   };
 }
 
@@ -54,25 +60,75 @@ export function pruneSessions(sessions, maxMessages = MAX_MESSAGES_PER_SESSION, 
     .map((s) => ({ ...s, messages: s.messages.slice(-maxMessages) }));
 }
 
-export function loadSessions() {
+/**
+ * Load the local sessions visible to `owner` (null/undefined = dev
+ * mode: everything lists). A session stamped with a different
+ * principal's owner is dropped — one user never sees another user's
+ * local copy. Ownerless entries (written before scoping, or in dev
+ * mode) are kept: they are claimed for the current user on save.
+ */
+export function loadSessions(owner) {
   try {
-    return pruneSessions(validateSessions(JSON.parse(localStorage.getItem(KEY) || "[]")));
+    const all = pruneSessions(
+      validateSessions(JSON.parse(localStorage.getItem(KEY) || "[]"))
+    );
+    if (owner == null) return all;
+    return all.filter((s) => !s.owner || s.owner === owner);
   } catch {
     return [];
   }
 }
 
 /**
+ * Reconcile the local copy against the server's per-user listing
+ * (GET /api/sessions): keep only local sessions the server lists
+ * for this user, and stamp the current owner onto kept sessions
+ * that lack one. A local session absent from the server list is
+ * another user's session, or one the server no longer has — either
+ * way it must not be shown. `serverSessions` is the endpoint's
+ * `sessions` array ({id, updated_at}); `owner` null means dev mode,
+ * where the server lists everything and nothing is stamped.
+ */
+export function reconcileSessions(localSessions, serverSessions, owner) {
+  // A malformed server answer (no array) reconciles nothing: a bad
+  // payload must never wipe the local copy.
+  if (!Array.isArray(serverSessions)) {
+    return pruneSessions(validateSessions(localSessions));
+  }
+  const serverIds = new Set(
+    serverSessions
+      .map((s) => (typeof s === "string" ? s : s?.id))
+      .filter((id) => typeof id === "string" && id)
+  );
+  return pruneSessions(
+    validateSessions(localSessions)
+      .filter((s) => serverIds.has(s.id))
+      .map((s) =>
+        owner && !s.owner ? { ...s, owner } : s
+      )
+  );
+}
+
+/**
  * Persist sessions, shrinking before giving up on quota errors.
  * Returns { ok: true } on success (pruned: true if a shrunk copy was
  * stored), or { ok: false } when even the smallest copy does not fit.
+ * When `owner` is given, sessions without one are stamped with it,
+ * so a session created locally is bound to its user in the local
+ * copy too (the server binds it on the first turn, ADR 0008).
  */
-export function saveSessions(sessions) {
+export function saveSessions(sessions, owner) {
+  const stamped =
+    owner && typeof owner === "string"
+      ? sessions.map((s) =>
+          s && typeof s === "object" && !s.owner ? { ...s, owner } : s
+        )
+      : sessions;
   const attempts = [
-    pruneSessions(sessions),
-    pruneSessions(sessions, 20, MAX_SESSIONS),
-    pruneSessions(sessions, 20, 20),
-    pruneSessions(sessions, 5, 20),
+    pruneSessions(stamped),
+    pruneSessions(stamped, 20, MAX_SESSIONS),
+    pruneSessions(stamped, 20, 20),
+    pruneSessions(stamped, 5, 20),
   ];
   let lastError = null;
   for (let i = 0; i < attempts.length; i++) {

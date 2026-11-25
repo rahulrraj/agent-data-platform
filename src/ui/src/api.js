@@ -74,6 +74,28 @@ export async function getReadiness() {
   return { ok: res.ok, body: await res.json().catch(() => ({})) };
 }
 
+/**
+ * GET /api/sessions: the caller's own sessions ({sessions: [{id,
+ * updated_at}]}), per-user history. A 401 drops the tokens and
+ * throws AuthError like the other calls, so the app routes back to
+ * the login gate.
+ */
+export async function getSessions() {
+  const res = await fetch(`${BASE}/api/sessions`, {
+    headers: await authHeaders(),
+  });
+  if (res.status === 401) unauthorized();
+  if (!res.ok) {
+    const detail = await errorDetail(res);
+    throw new Error(
+      detail
+        ? `sessions check failed: ${res.status}: ${detail}`
+        : `sessions check failed: ${res.status}`
+    );
+  }
+  return res.json();
+}
+
 // m-33/m-34: split an SSE stream per spec — events are separated by a
 // blank line in either \n\n or \r\n\r\n framing, and one event block
 // may carry several `data:` lines, which concatenate with "\n".

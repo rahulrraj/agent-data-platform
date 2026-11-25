@@ -4,12 +4,14 @@ import {
   STORAGE_KEYS,
   buildAuthorizeUrl,
   clearDiscoveryCache,
+  clearTokens,
   createCodeChallenge,
   createCodeVerifier,
   decodeJwtPayload,
   discover,
   getAuthConfig,
   getAuthHeaders,
+  getCurrentPrincipal,
   getStoredAccessToken,
   getStoredRefreshToken,
   getValidAccessToken,
@@ -555,5 +557,53 @@ describe("getAuthHeaders", () => {
     await expect(getAuthHeaders(config, fetchFn)).resolves.toEqual({
       Authorization: "Bearer fresh",
     });
+  });
+});
+
+
+describe("current principal (per-user history)", () => {
+  it("is null with no stored tokens", () => {
+    expect(getCurrentPrincipal()).toBeNull();
+  });
+
+  it("is stored with the tokens and cleared with them", () => {
+    storeTokens({ accessToken: "tok-1", expiresIn: 3600, principal: "alice" });
+    expect(getCurrentPrincipal()).toBe("alice");
+    expect(sessionStorage.getItem(STORAGE_KEYS.principal)).toBe("alice");
+    // A later store without a principal keeps the previous one (e.g.
+    // a refresh with no fresh id_token).
+    storeTokens({ accessToken: "tok-2", expiresIn: 3600 });
+    expect(getCurrentPrincipal()).toBe("alice");
+    clearTokens();
+    expect(getCurrentPrincipal()).toBeNull();
+    expect(sessionStorage.getItem(STORAGE_KEYS.principal)).toBeNull();
+  });
+
+  it("is recorded from the id_token sub on callback", async () => {
+    const fetchFn = oidcFetch({
+      tokenResponse: { access_token: "access-1", expires_in: 3600 },
+    });
+    const { state, pending } = await loginAndCallback(fetchFn);
+    fetchFn.mockImplementation(async (url) => {
+      const u = String(url);
+      if (u === `${ISSUER}/.well-known/openid-configuration`) {
+        return { ok: true, status: 200, json: async () => DISCOVERY };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          access_token: "access-1",
+          expires_in: 3600,
+          id_token: idToken({ sub: "alice", nonce: pending.nonce }),
+        }),
+      };
+    });
+    const result = await handleCallback(config, {
+      search: `?code=auth-code&state=${state}`,
+      fetchFn,
+    });
+    expect(result).toEqual({ handled: true, authenticated: true });
+    expect(getCurrentPrincipal()).toBe("alice");
   });
 });

@@ -42,6 +42,11 @@ export const STORAGE_KEYS = {
   accessToken: "agent.auth.access_token",
   refreshToken: "agent.auth.refresh_token",
   expiresAt: "agent.auth.expires_at",
+  // The validated id_token `sub` of the signed-in principal, stored
+  // alongside the tokens so the app can scope per-user local state
+  // (e.g. the session list) without re-decoding any token. Cleared
+  // with the tokens on sign-out / expiry; never in localStorage.
+  principal: "agent.auth.principal",
   pending: "agent.auth.pending",
 };
 
@@ -254,10 +259,16 @@ export function validateIdTokenClaims(
  * overwritten when one is supplied, so a rotation-less refresh
  * response keeps the previous refresh token.
  */
-export function storeTokens({ accessToken, refreshToken, expiresIn, idTokenExp }) {
+export function storeTokens({ accessToken, refreshToken, expiresIn, idTokenExp, principal }) {
   if (!accessToken) throw new AuthError("Sign-in failed: no access token.");
   storageSet(STORAGE_KEYS.accessToken, accessToken);
   if (refreshToken) storageSet(STORAGE_KEYS.refreshToken, refreshToken);
+  // `principal` is the validated id_token `sub` (see handleCallback /
+  // refreshAccessToken). It is only overwritten when supplied, so a
+  // refresh without a fresh id_token keeps the previous principal.
+  if (typeof principal === "string" && principal) {
+    storageSet(STORAGE_KEYS.principal, principal);
+  }
   const expiresAt =
     typeof expiresIn === "number"
       ? Date.now() + expiresIn * 1000
@@ -272,6 +283,17 @@ export function getStoredAccessToken() {
   return storageGet(STORAGE_KEYS.accessToken);
 }
 
+/**
+ * The signed-in principal (`sub` from the validated id_token), or
+ * null when nobody is signed in (dev bypass, or tokens cleared).
+ * This is what scopes per-user local state — it is the same identity
+ * the backend binds sessions to (ADR 0008), read from storage
+ * rather than re-decoded from a token.
+ */
+export function getCurrentPrincipal() {
+  return storageGet(STORAGE_KEYS.principal);
+}
+
 export function getStoredRefreshToken() {
   return storageGet(STORAGE_KEYS.refreshToken);
 }
@@ -280,6 +302,7 @@ export function clearTokens() {
   storageRemove(STORAGE_KEYS.accessToken);
   storageRemove(STORAGE_KEYS.refreshToken);
   storageRemove(STORAGE_KEYS.expiresAt);
+  storageRemove(STORAGE_KEYS.principal);
 }
 
 function tokenExpired(now = Date.now()) {
@@ -337,14 +360,16 @@ export function refreshAccessToken(config, fetchFn = globalThis.fetch) {
       clearTokens();
       throw new AuthError("Your session has expired. Please sign in again.");
     }
+    let refreshedPrincipal;
     if (tokens.id_token) {
       // A refreshed id_token carries no nonce (no fresh login
       // attempt), so nonce is not checked here — iss/aud/exp/sub are.
-      validateIdTokenClaims(decodeJwtPayload(tokens.id_token), {
+      const payload = validateIdTokenClaims(decodeJwtPayload(tokens.id_token), {
         issuer: config.issuer,
         audience: config.audience,
         clientId: config.clientId,
       });
+      refreshedPrincipal = payload.sub;
     }
     storeTokens({
       accessToken: tokens.access_token,
@@ -353,6 +378,7 @@ export function refreshAccessToken(config, fetchFn = globalThis.fetch) {
       idTokenExp: tokens.id_token
         ? decodeJwtPayload(tokens.id_token).exp
         : undefined,
+      principal: refreshedPrincipal,
     });
     return tokens.access_token;
   })();
@@ -547,6 +573,7 @@ export async function handleCallback(
       throw new AuthError("Sign-in failed: no access token was returned.");
     }
     let idTokenExp;
+    let idTokenSub;
     if (tokens.id_token) {
       const payload = validateIdTokenClaims(decodeJwtPayload(tokens.id_token), {
         issuer: config.issuer,
@@ -555,6 +582,7 @@ export async function handleCallback(
         nonce: pending.nonce,
       });
       idTokenExp = payload.exp;
+      idTokenSub = payload.sub;
     }
     clearTokens();
     storeTokens({
@@ -562,6 +590,7 @@ export async function handleCallback(
       refreshToken: tokens.refresh_token,
       expiresIn: tokens.expires_in,
       idTokenExp,
+      principal: idTokenSub,
     });
     return { handled: true, authenticated: true };
   } catch (e) {

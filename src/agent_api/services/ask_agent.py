@@ -18,9 +18,12 @@ so memory/sqlite/postgres behave identically):
   The lock is polled non-blockingly in the streaming path so waiting
   never blocks the event loop.
 - The gateway never sees more than MAX_HISTORY_TURNS turns: history is
-  truncated to the last N turns at handoff (the stored conversation is
-  kept whole — truncation is a handoff window, not deletion), so an
-  over-long session cannot brick itself against the model context window.
+  selected by relevance at handoff (see history_selection.py — the
+  most relevant past exchanges plus the immediately preceding one),
+  falling back to recency when embeddings are unavailable. The stored
+  conversation is kept whole — selection is a handoff window, not
+  deletion — so an over-long session cannot brick itself against the
+  model context window.
   `reset_session()` clears a session outright when a caller wants a
   fresh start.
 """
@@ -46,6 +49,7 @@ from agent_api.ports.capability_repository import (
 from agent_api.ports.conversation_repository import (
     ConversationRepository,
     ConversationRepositoryError,
+    SessionSummary,
 )
 from agent_api.ports.embedding_gateway import EmbeddingGateway, EmbeddingGatewayError
 from agent_api.ports.model_gateway import (
@@ -54,10 +58,12 @@ from agent_api.ports.model_gateway import (
     ModelGatewayResolver,
     StreamChunk,
 )
+from agent_api.services.history_selection import select_history_turns
 
-# History window handed to the gateway: 40 turns = 20 exchanges. Large
-# enough for real follow-ups, small enough to stay inside small-model
-# context windows. Stored history is NOT truncated — see module docstring.
+# Absolute ceiling on the gateway handoff window (see
+# history_selection.py); selection normally sends at most 3 exchanges
+# (2 most relevant + the immediately preceding one). Stored history is
+# NOT truncated — see module docstring.
 MAX_HISTORY_TURNS = 40
 
 # One span per turn (ADR 0009), named from our own vocabulary so alerts
@@ -244,15 +250,26 @@ class AskAgentService:
         except ConversationRepositoryError as exc:
             raise AgentServiceError(str(exc)) from exc
 
-    @staticmethod
-    def _gateway_conversation(conversation: Conversation) -> Conversation:
-        """The handoff window: last MAX_HISTORY_TURNS turns, as a copy.
+    def _gateway_conversation(
+        self, conversation: Conversation, message: str
+    ) -> Conversation:
+        """The handoff window: relevance-selected history + current turn.
 
-        A copy, so gateway seeding can never mutate the stored history.
+        The stored conversation is kept whole — selection is a handoff
+        window, not deletion. History turns are the stored turns before
+        the current user message; the current turn is always appended
+        last, so the gateway always sees the question it must answer.
+        Selection falls back to recency internally and never raises.
         """
+        selection = select_history_turns(
+            conversation.turns[:-1],
+            message,
+            self._embedding_gateway,
+            max_turns=MAX_HISTORY_TURNS,
+        )
         return Conversation(
             id=conversation.id,
-            turns=list(conversation.turns[-MAX_HISTORY_TURNS:]),
+            turns=[*selection.turns, conversation.turns[-1]],
             owner=conversation.owner,
         )
 
@@ -273,6 +290,21 @@ class AskAgentService:
                 raise AgentServiceError(str(exc)) from exc
             self._enforce_owner(conversation, principal)
             self._save(Conversation(id=conversation_id, owner=principal))
+
+    def list_sessions(
+        self, principal: str | None = None
+    ) -> list[SessionSummary]:
+        """Sessions visible to `principal`, for per-user history.
+
+        Ownership is enforced by the repository's list filter (the
+        same rule as _enforce_owner): an authenticated caller sees
+        only sessions bound to that principal; principal None (dev
+        mode, auth off) lists every session, including unowned ones.
+        """
+        try:
+            return self._conversations.list_sessions(principal)
+        except ConversationRepositoryError as exc:
+            raise AgentServiceError(str(exc)) from exc
 
     # -- turns --------------------------------------------------------------
 
@@ -313,7 +345,7 @@ class AskAgentService:
                     try:
                         with request_context(principal, user_token):
                             turn = gateway.generate(
-                                self._gateway_conversation(conversation)
+                                self._gateway_conversation(conversation, message)
                             )
                     except ModelGatewayError as exc:
                         turn_outcome = "error"
@@ -390,7 +422,7 @@ class AskAgentService:
                         try:
                             with request_context(principal, user_token):
                                 async for chunk in gateway.stream(
-                                    self._gateway_conversation(conversation)
+                                    self._gateway_conversation(conversation, message)
                                 ):
                                     if chunk.kind == "text":
                                         texts.append(chunk.payload)

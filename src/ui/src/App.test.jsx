@@ -169,3 +169,90 @@ describe("login gate (ADR 0008)", () => {
     }
   });
 });
+
+describe("per-user history reconciliation", () => {
+  function seedLocal(sessions) {
+    localStorage.setItem("agent.sessions", JSON.stringify(sessions));
+  }
+
+  function apiFetch(sessionIds) {
+    return vi.fn(async (url) => {
+      const u = String(url);
+      if (u.includes("/api/sessions")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            sessions: sessionIds.map((id) => ({ id, updated_at: null })),
+          }),
+        };
+      }
+      if (u.includes("/api/health")) return healthOk();
+      return { ok: true, status: 200, json: async () => ({ status: "ok", failing: [] }) };
+    });
+  }
+
+  it("drops local sessions the server does not list (dev mode)", async () => {
+    seedLocal([
+      { id: "s1", title: "Drop me", messages: [], updatedAt: 1 },
+      { id: "s2", title: "Keep me", messages: [], updatedAt: 2 },
+    ]);
+    global.fetch = apiFetch(["s2"]);
+    render(<App />);
+    // "Keep me" renders on first paint from the local copy; the
+    // reconcile is async, so wait for the drop to land, not just
+    // for the kept session to appear.
+    await waitFor(() =>
+      expect(screen.queryByText("Drop me")).toBeNull()
+    );
+    expect(screen.getByText("Keep me")).toBeTruthy();
+    // The reconciled list is what gets persisted.
+    await waitFor(() =>
+      expect(
+        JSON.parse(localStorage.getItem("agent.sessions")).map((s) => s.id)
+      ).toEqual(["s2"])
+    );
+  });
+
+  it("login as a different user drops the previous user's sessions", async () => {
+    vi.unstubAllEnvs();
+    vi.stubEnv("VITE_OIDC_ISSUER", "https://example.okta.com");
+    vi.stubEnv("VITE_OIDC_CLIENT_ID", "fake-client-id");
+    storeTokens({ accessToken: "tok-1", expiresIn: 3600, principal: "alice" });
+    seedLocal([
+      { id: "alice-s", title: "Alice chat", messages: [], updatedAt: 2, owner: "alice" },
+      // Ownerless stale session from an earlier user of this browser:
+      // the scoped load keeps it, only the server list can drop it.
+      { id: "stale-s", title: "Stale chat", messages: [], updatedAt: 1 },
+    ]);
+    global.fetch = apiFetch(["alice-s"]);
+    render(<App />);
+    // "Alice chat" renders on first paint from the local copy; the
+    // reconcile is async, so wait for the drop to land, not just
+    // for the kept session to appear.
+    await waitFor(() =>
+      expect(screen.queryByText("Stale chat")).toBeNull()
+    );
+    expect(screen.getByText("Alice chat")).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        JSON.parse(localStorage.getItem("agent.sessions")).map((s) => s.id)
+      ).toEqual(["alice-s"])
+    );
+  });
+
+  it("leaves local sessions alone when the sessions fetch fails", async () => {
+    seedLocal([
+      { id: "s1", title: "Keep me anyway", messages: [], updatedAt: 1 },
+    ]);
+    global.fetch = vi.fn(async (url) => {
+      if (String(url).includes("/api/sessions")) throw new Error("down");
+      if (String(url).includes("/api/health")) return healthOk();
+      return { ok: true, status: 200, json: async () => ({ status: "ok", failing: [] }) };
+    });
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByText("Keep me anyway")).toBeTruthy()
+    );
+  });
+});

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getHealth, getReadiness, streamChat } from "./api.js";
+import { getHealth, getReadiness, getSessions, streamChat } from "./api.js";
 import {
   clearDiscoveryCache,
   storeTokens,
@@ -332,5 +332,47 @@ describe("authorization headers and 401 handling (ADR 0008)", () => {
         headers: expect.objectContaining({ Authorization: "Bearer fresh" }),
       })
     );
+  });
+});
+
+describe("getSessions (per-user history)", () => {
+  it("returns the server's session list and attaches the bearer token", async () => {
+    storeTokens({ accessToken: "tok-1", expiresIn: 3600 });
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        sessions: [{ id: "a", updated_at: "2026-11-25T13:00:00+00:00" }],
+      }),
+    }));
+    await expect(getSessions()).resolves.toEqual({
+      sessions: [{ id: "a", updated_at: "2026-11-25T13:00:00+00:00" }],
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/sessions",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok-1" },
+      })
+    );
+  });
+
+  it("drops tokens and throws AuthError on a 401", async () => {
+    storeTokens({ accessToken: "tok-1", expiresIn: 3600 });
+    global.fetch = vi.fn(async () => ({ ok: false, status: 401 }));
+    await expect(getSessions()).rejects.toThrow("session has expired");
+    expect(sessionStorage.getItem("agent.auth.access_token")).toBeNull();
+  });
+
+  it("throws with the server detail on a non-OK response", async () => {
+    storeTokens({ accessToken: "tok-1", expiresIn: 3600 });
+    global.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 502,
+      clone: () => ({
+        json: async () => ({ detail: "store down" }),
+        text: async () => "",
+      }),
+    }));
+    await expect(getSessions()).rejects.toThrow("store down");
   });
 });
